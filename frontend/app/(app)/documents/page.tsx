@@ -8,8 +8,8 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { getDocuments, searchDocuments } from "@/lib/api"
-import type { DocumentListItem, SearchResult } from "@/types"
+import { getDocuments, getFolders, getProjects, searchDocuments } from "@/lib/api"
+import type { DocumentListItem, Folder, Project, SearchResult } from "@/types"
 
 type ListItem = DocumentListItem | SearchResult
 
@@ -21,6 +21,13 @@ export default function DocumentsPage() {
   const [query, setQuery] = useState("")
   const [docs, setDocs] = useState<DocumentListItem[]>([])
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [folders, setFolders] = useState<Folder[]>([])
+  const [selectedProjectId, setSelectedProjectId] = useState("")
+  const [selectedFolderId, setSelectedFolderId] = useState("")
+  const [selectedStatus, setSelectedStatus] = useState("")
+  const [selectedTag, setSelectedTag] = useState("")
+  const [showOrphansOnly, setShowOrphansOnly] = useState(false)
   const [loading, setLoading] = useState(true)
   const [searching, setSearching] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -30,12 +37,31 @@ export default function DocumentsPage() {
     setLoading(true)
     setError(null)
     try {
-      setDocs(await getDocuments())
+      const loadedDocs = await getDocuments({
+        project_id: selectedProjectId || undefined,
+        folder_id: selectedFolderId || undefined,
+        status: selectedStatus || undefined,
+        tag: selectedTag || undefined,
+        orphaned: showOrphansOnly || undefined,
+      })
+      setDocs(loadedDocs)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load documents")
     } finally {
       setLoading(false)
     }
+  }, [selectedFolderId, selectedProjectId, selectedStatus, selectedTag, showOrphansOnly])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [loadedProjects, loadedFolders] = await Promise.all([getProjects(), getFolders()])
+        setProjects(loadedProjects)
+        setFolders(loadedFolders)
+      } catch {
+        // ignore filter bootstrap errors
+      }
+    })()
   }, [])
 
   useEffect(() => {
@@ -49,13 +75,18 @@ export default function DocumentsPage() {
       return
     }
     searchTimer.current = setTimeout(async () => {
-      setSearching(true)
-      setError(null)
-      try {
-        setSearchResults(await searchDocuments(query.trim()))
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Search failed")
-        setSearchResults([])
+        setSearching(true)
+        setError(null)
+        try {
+          setSearchResults(await searchDocuments(query.trim(), {
+            project_id: selectedProjectId || undefined,
+            folder_id: selectedFolderId || undefined,
+            status: selectedStatus || undefined,
+            tag: selectedTag || undefined,
+          }))
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Search failed")
+          setSearchResults([])
       } finally {
         setSearching(false)
       }
@@ -63,7 +94,7 @@ export default function DocumentsPage() {
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current)
     }
-  }, [query])
+  }, [query, selectedFolderId, selectedProjectId, selectedStatus, selectedTag])
 
   const items: ListItem[] = searchResults !== null ? searchResults : docs
   const isSearch = searchResults !== null
@@ -86,6 +117,41 @@ export default function DocumentsPage() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-5">
+        <select
+          value={selectedProjectId}
+          onChange={(e) => { setSelectedProjectId(e.target.value); setSelectedFolderId("") }}
+          className="h-9 rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          <option value="">All projects</option>
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>{project.name}</option>
+          ))}
+        </select>
+
+        <select
+          value={selectedFolderId}
+          onChange={(e) => setSelectedFolderId(e.target.value)}
+          className="h-9 rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          <option value="">All folders</option>
+          {folders
+            .filter((folder) => !selectedProjectId || folder.project_id === selectedProjectId)
+            .map((folder) => (
+              <option key={folder.id} value={folder.id}>{folder.name}</option>
+            ))}
+        </select>
+
+        <Input placeholder="Filter by tag" value={selectedTag} onChange={(e) => setSelectedTag(e.target.value)} />
+
+        <Input placeholder="Filter by status" value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)} />
+
+        <label className="flex items-center gap-2 rounded-lg border border-input px-3 text-sm">
+          <input type="checkbox" checked={showOrphansOnly} onChange={(e) => setShowOrphansOnly(e.target.checked)} />
+          Orphans only
+        </label>
       </div>
 
       {error && (
@@ -131,11 +197,11 @@ export default function DocumentsPage() {
                         <FileText className="size-4 shrink-0 text-muted-foreground mt-0.5" />
                         <div className="min-w-0">
                           <p className="text-sm font-medium truncate">{item.title}</p>
-                          <p className="text-xs text-muted-foreground truncate">{item.file_name}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {item.project_name ?? "No project"} · {item.folder_name ?? item.file_name}
+                          </p>
                           {snippet && (
-                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                              {snippet}
-                            </p>
+                            <p className="text-xs text-muted-foreground mt-1 line-clamp-3" dangerouslySetInnerHTML={{ __html: snippet }} />
                           )}
                           {tags.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-1.5">
@@ -145,6 +211,9 @@ export default function DocumentsPage() {
                                 </Badge>
                               ))}
                             </div>
+                          )}
+                          {item.status && (
+                            <p className="text-xs text-muted-foreground mt-1">Status: {item.status}</p>
                           )}
                         </div>
                       </div>

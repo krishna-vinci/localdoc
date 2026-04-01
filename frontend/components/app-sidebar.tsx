@@ -1,6 +1,6 @@
 "use client"
 
-import { FileText, FolderOpen, Home, Search } from "lucide-react"
+import { FileText, FolderOpen, Home, Layers3, Search } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 
@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils"
 
 const navItems = [
   { href: "/", icon: Home, label: "Dashboard" },
+  { href: "/projects", icon: Layers3, label: "Projects" },
   { href: "/folders", icon: FolderOpen, label: "Folders" },
   { href: "/documents", icon: FileText, label: "Documents" },
   { href: "/search", icon: Search, label: "Search" },

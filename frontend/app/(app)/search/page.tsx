@@ -2,22 +2,47 @@
 
 import { FileText, Search } from "lucide-react"
 import Link from "next/link"
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { searchDocuments } from "@/lib/api"
-import type { SearchResult } from "@/types"
+import { getFolders, getProjects, searchDocuments } from "@/lib/api"
+import type { Folder, Project, SearchResult } from "@/types"
 
 export default function SearchPage() {
   const [query, setQuery] = useState("")
   const [results, setResults] = useState<SearchResult[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
+  const [folders, setFolders] = useState<Folder[]>([])
+  const [selectedProjectId, setSelectedProjectId] = useState("")
+  const [selectedFolderId, setSelectedFolderId] = useState("")
+  const [selectedTag, setSelectedTag] = useState("")
+  const [selectedStatus, setSelectedStatus] = useState("")
   const [searched, setSearched] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [loadedProjects, loadedFolders] = await Promise.all([getProjects(), getFolders()])
+        setProjects(loadedProjects)
+        setFolders(loadedFolders)
+      } catch {
+        // ignore filter boot errors
+      }
+    })()
+  }, [])
+
+  useEffect(() => {
+    if (query.trim()) {
+      handleChange(query)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId, selectedFolderId, selectedTag, selectedStatus])
 
   function handleChange(value: string) {
     setQuery(value)
@@ -31,7 +56,12 @@ export default function SearchPage() {
       setLoading(true)
       setError(null)
       try {
-        setResults(await searchDocuments(value.trim()))
+        setResults(await searchDocuments(value.trim(), {
+          project_id: selectedProjectId || undefined,
+          folder_id: selectedFolderId || undefined,
+          tag: selectedTag || undefined,
+          status: selectedStatus || undefined,
+        }))
         setSearched(true)
       } catch (e) {
         setError(e instanceof Error ? e.message : "Search failed")
@@ -60,6 +90,31 @@ export default function SearchPage() {
           value={query}
           onChange={(e) => handleChange(e.target.value)}
         />
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-4">
+        <select
+          value={selectedProjectId}
+          onChange={(e) => { setSelectedProjectId(e.target.value); setSelectedFolderId("") }}
+          className="h-9 rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          <option value="">All projects</option>
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>{project.name}</option>
+          ))}
+        </select>
+        <select
+          value={selectedFolderId}
+          onChange={(e) => setSelectedFolderId(e.target.value)}
+          className="h-9 rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          <option value="">All folders</option>
+          {folders.filter((folder) => !selectedProjectId || folder.project_id === selectedProjectId).map((folder) => (
+            <option key={folder.id} value={folder.id}>{folder.name}</option>
+          ))}
+        </select>
+        <Input placeholder="Tag" value={selectedTag} onChange={(e) => setSelectedTag(e.target.value)} />
+        <Input placeholder="Status" value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)} />
       </div>
 
       {error && (
@@ -98,11 +153,11 @@ export default function SearchPage() {
                       <FileText className="size-4 shrink-0 text-muted-foreground mt-0.5" />
                       <div className="min-w-0">
                         <p className="text-sm font-medium truncate">{r.title}</p>
-                        <p className="text-xs text-muted-foreground truncate">{r.file_name}</p>
+                        <p className="text-xs text-muted-foreground truncate">
+                          {r.project_name ?? "No project"} · {r.folder_name ?? r.file_name}
+                        </p>
                         {r.snippet && (
-                          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                            {r.snippet}
-                          </p>
+                          <p className="text-xs text-muted-foreground mt-1 line-clamp-3" dangerouslySetInnerHTML={{ __html: r.snippet }} />
                         )}
                         {tags.length > 0 && (
                           <div className="flex flex-wrap gap-1 mt-1.5">
@@ -113,6 +168,7 @@ export default function SearchPage() {
                             ))}
                           </div>
                         )}
+                        {r.status && <p className="text-xs text-muted-foreground mt-1">Status: {r.status}</p>}
                       </div>
                     </div>
                   </CardContent>

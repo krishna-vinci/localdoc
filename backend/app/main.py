@@ -1,8 +1,20 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import documents, folders, search, stats, sync
+from app.api import documents, folders, projects, search, stats, sync
 from app.core.config import settings
+from app.services.watcher import folder_watcher
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await folder_watcher.start()
+    try:
+        yield
+    finally:
+        await folder_watcher.stop()
 
 
 def create_app() -> FastAPI:
@@ -10,6 +22,7 @@ def create_app() -> FastAPI:
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
         debug=settings.DEBUG,
+        lifespan=lifespan,
     )
 
     app.add_middleware(
@@ -21,6 +34,7 @@ def create_app() -> FastAPI:
     )
 
     # Include routers
+    app.include_router(projects.router, prefix="/api/v1/projects", tags=["projects"])
     app.include_router(folders.router, prefix="/api/v1/folders", tags=["folders"])
     app.include_router(documents.router, prefix="/api/v1/documents", tags=["documents"])
     app.include_router(search.router, prefix="/api/v1/search", tags=["search"])

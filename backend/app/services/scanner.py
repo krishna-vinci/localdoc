@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -47,6 +48,40 @@ def _extract_tags(post: frontmatter.Post) -> str | None:
     else:
         return None
     return ",".join(tags)[:512] if tags else None
+
+
+def _extract_status(post: frontmatter.Post) -> str | None:
+    raw = post.get("status")
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value[:100] if value else None
+
+
+def _extract_headings(content: str) -> str | None:
+    headings = [
+        line.lstrip("#").strip()
+        for line in content.splitlines()
+        if re.match(r"^#{1,6}\s+", line.strip())
+    ]
+    return json.dumps(headings) if headings else None
+
+
+def _extract_links(content: str) -> str | None:
+    markdown_links = re.findall(r"\[[^\]]+\]\(([^)]+)\)", content)
+    autolinks = re.findall(r"https?://[^\s)>]+", content)
+    deduped_links = list(dict.fromkeys(link.strip().rstrip(").,;") for link in markdown_links + autolinks if link.strip()))
+    links = [link for link in deduped_links if link]
+    return json.dumps(links) if links else None
+
+
+def _extract_tasks(content: str) -> tuple[str | None, int]:
+    tasks = [
+        line.strip()
+        for line in content.splitlines()
+        if re.match(r"^\s*[-*]\s+\[(?: |x|X)\]\s+", line)
+    ]
+    return (json.dumps(tasks), len(tasks)) if tasks else (None, 0)
 
 
 def _frontmatter_to_json(post: frontmatter.Post) -> str | None:
@@ -112,6 +147,10 @@ async def scan_folder(folder: Folder, db: AsyncSession) -> dict[str, int]:
                 content_hash = _compute_hash(raw_text)
                 title = _extract_title(post, file_path_obj.stem)
                 tags = _extract_tags(post)
+                status = _extract_status(post)
+                headings = _extract_headings(post.content)
+                links = _extract_links(post.content)
+                tasks, task_count = _extract_tasks(post.content)
                 fm_json = _frontmatter_to_json(post)
                 size_bytes = file_path_obj.stat().st_size
 
@@ -126,6 +165,11 @@ async def scan_folder(folder: Folder, db: AsyncSession) -> dict[str, int]:
                     doc.content_hash = content_hash
                     doc.frontmatter = fm_json
                     doc.tags = tags
+                    doc.status = status
+                    doc.headings = headings
+                    doc.links = links
+                    doc.tasks = tasks
+                    doc.task_count = task_count
                     doc.size_bytes = size_bytes
                     doc.indexed_at = _utcnow()
                     doc.updated_at = _utcnow()
@@ -139,6 +183,11 @@ async def scan_folder(folder: Folder, db: AsyncSession) -> dict[str, int]:
                         content_hash=content_hash,
                         frontmatter=fm_json,
                         tags=tags,
+                        status=status,
+                        headings=headings,
+                        links=links,
+                        tasks=tasks,
+                        task_count=task_count,
                         size_bytes=size_bytes,
                         device_id=folder.device_id,
                         indexed_at=_utcnow(),

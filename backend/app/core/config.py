@@ -35,6 +35,7 @@ class Settings(BaseSettings):
 
     # File watching
     WATCHDEBOUNCE_SECONDS: float = 0.5
+    WATCH_POLL_SECONDS: float = 5.0
     FILESYSTEM_ROOT: str = ""
 
 

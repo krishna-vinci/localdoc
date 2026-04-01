@@ -1,8 +1,8 @@
-import { FileText, FolderOpen, Tag } from "lucide-react"
+import { FileText, FolderOpen, GitBranch, Layers3, Tag } from "lucide-react"
 import Link from "next/link"
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { getDocuments, getStats } from "@/lib/api"
+import { getDocuments, getDuplicateDocuments, getOrphanDocuments, getStats } from "@/lib/api"
 import type { Stats } from "@/types"
 
 function StatCard({
@@ -28,12 +28,27 @@ function StatCard({
 }
 
 export default async function DashboardPage() {
-  let stats: Stats = { document_count: 0, folder_count: 0, tag_count: 0 }
+  let stats: Stats = {
+    document_count: 0,
+    folder_count: 0,
+    project_count: 0,
+    tag_count: 0,
+    orphan_document_count: 0,
+    duplicate_candidate_count: 0,
+    watched_folder_count: 0,
+  }
   let recentDocs: Awaited<ReturnType<typeof getDocuments>> = []
+  let orphanDocs: Awaited<ReturnType<typeof getOrphanDocuments>> = []
+  let duplicateDocs: Awaited<ReturnType<typeof getDuplicateDocuments>> = []
   let loadError: string | null = null
 
   try {
-    ;[stats, recentDocs] = await Promise.all([getStats(), getDocuments()])
+    ;[stats, recentDocs, orphanDocs, duplicateDocs] = await Promise.all([
+      getStats(),
+      getDocuments(),
+      getOrphanDocuments(6),
+      getDuplicateDocuments(6),
+    ])
   } catch (error) {
     loadError = error instanceof Error ? error.message : "Failed to load dashboard data"
   }
@@ -56,58 +71,107 @@ export default async function DashboardPage() {
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard label="Documents" value={stats.document_count} icon={FileText} />
         <StatCard label="Folders" value={stats.folder_count} icon={FolderOpen} />
+        <StatCard label="Projects" value={stats.project_count} icon={Layers3} />
         <StatCard label="Tags" value={stats.tag_count} icon={Tag} />
+        <StatCard label="Orphans" value={stats.orphan_document_count} icon={GitBranch} />
+        <StatCard label="Watching" value={stats.watched_folder_count} icon={FolderOpen} />
       </div>
 
-      {/* Recent documents */}
-      <section>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Recent Documents</h2>
-          <Link
-            href="/documents"
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            View all →
-          </Link>
-        </div>
-
-        {recent.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border py-16 text-center text-muted-foreground">
-            <FileText className="mx-auto mb-3 size-8 opacity-40" />
-            <p className="text-sm">No documents yet.</p>
-            <p className="text-xs mt-1">
-              <Link href="/folders" className="underline underline-offset-4 hover:text-foreground">
-                Add a folder
-              </Link>{" "}
-              and scan it to get started.
-            </p>
+      <div className="grid gap-6 xl:grid-cols-3">
+        <section className="space-y-4 xl:col-span-1">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Recent Documents</h2>
+            <Link href="/documents" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+              View all →
+            </Link>
           </div>
-        ) : (
-          <div className="grid gap-2">
-            {recent.map((doc) => (
-              <Link key={doc.id} href={`/documents/${doc.id}`}>
-                <Card className="hover:bg-muted/50 transition-colors cursor-pointer">
-                  <CardContent className="flex items-center justify-between py-3 px-4">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <FileText className="size-4 shrink-0 text-muted-foreground" />
+          {recent.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border py-10 text-center text-muted-foreground">
+              <FileText className="mx-auto mb-3 size-8 opacity-40" />
+              <p className="text-sm">No documents yet.</p>
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              {recent.map((doc) => (
+                <Link key={doc.id} href={`/documents/${doc.id}`}>
+                  <Card className="hover:bg-muted/50 transition-colors cursor-pointer">
+                    <CardContent className="flex items-center justify-between py-3 px-4">
                       <div className="min-w-0">
                         <p className="text-sm font-medium truncate">{doc.title}</p>
-                        <p className="text-xs text-muted-foreground truncate">{doc.file_name}</p>
+                        <p className="text-xs text-muted-foreground truncate">
+                          {doc.project_name ?? "No project"} · {doc.folder_name ?? doc.file_name}
+                        </p>
                       </div>
-                    </div>
-                    <time className="text-xs text-muted-foreground shrink-0 ml-4">
-                      {new Date(doc.updated_at).toLocaleDateString()}
-                    </time>
-                  </CardContent>
-                </Card>
-              </Link>
-            ))}
+                      <time className="text-xs text-muted-foreground shrink-0 ml-4">
+                        {new Date(doc.updated_at).toLocaleDateString()}
+                      </time>
+                    </CardContent>
+                  </Card>
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-4 xl:col-span-1">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Orphan Documents</h2>
+            <Link href="/documents?orphaned=true" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+              Review →
+            </Link>
           </div>
-        )}
-      </section>
+          {orphanDocs.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border py-10 text-center text-muted-foreground text-sm">
+              All indexed documents belong to a project.
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              {orphanDocs.map((doc) => (
+                <Link key={doc.id} href={`/documents/${doc.id}`}>
+                  <Card className="hover:bg-muted/50 transition-colors cursor-pointer">
+                    <CardContent className="py-3 px-4">
+                      <p className="text-sm font-medium truncate">{doc.title}</p>
+                      <p className="text-xs text-muted-foreground truncate">{doc.folder_name ?? doc.file_name}</p>
+                    </CardContent>
+                  </Card>
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-4 xl:col-span-1">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Duplicate Candidates</h2>
+            <Link href="/documents" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+              Inspect →
+            </Link>
+          </div>
+          {duplicateDocs.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border py-10 text-center text-muted-foreground text-sm">
+              No duplicate candidates detected.
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              {duplicateDocs.map((doc) => (
+                <Link key={doc.id} href={`/documents/${doc.id}`}>
+                  <Card className="hover:bg-muted/50 transition-colors cursor-pointer">
+                    <CardContent className="py-3 px-4">
+                      <p className="text-sm font-medium truncate">{doc.title}</p>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {doc.project_name ?? "No project"} · {doc.folder_name ?? doc.file_name}
+                      </p>
+                    </CardContent>
+                  </Card>
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   )
 }

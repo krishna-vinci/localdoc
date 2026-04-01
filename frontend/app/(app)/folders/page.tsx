@@ -16,11 +16,22 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { createFolder, deleteFolder, getFolders, scanFolder } from "@/lib/api"
-import type { Folder, ScanSummary } from "@/types"
+import {
+  createFolder,
+  deleteFolder,
+  getFolders,
+  getProjects,
+  getWatchStatuses,
+  reindexFolders,
+  scanFolder,
+  updateFolder,
+} from "@/lib/api"
+import type { Folder, Project, ScanSummary, WatchStatus } from "@/types"
 
 export default function FoldersPage() {
   const [folders, setFolders] = useState<Folder[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
+  const [watchStatuses, setWatchStatuses] = useState<Record<string, WatchStatus>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -28,8 +39,10 @@ export default function FoldersPage() {
   const [addOpen, setAddOpen] = useState(false)
   const [newPath, setNewPath] = useState("")
   const [newName, setNewName] = useState("")
+  const [newProjectId, setNewProjectId] = useState("")
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
+  const [reindexing, setReindexing] = useState(false)
 
   // Scan state per folder
   const [scanning, setScanning] = useState<Record<string, boolean>>({})
@@ -37,12 +50,21 @@ export default function FoldersPage() {
 
   // Delete state
   const [deleting, setDeleting] = useState<Record<string, boolean>>({})
+  const [savingProject, setSavingProject] = useState<Record<string, boolean>>({})
+  const [savingWatch, setSavingWatch] = useState<Record<string, boolean>>({})
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      setFolders(await getFolders())
+      const [loadedFolders, loadedProjects, loadedWatchStatuses] = await Promise.all([
+        getFolders(),
+        getProjects(),
+        getWatchStatuses(),
+      ])
+      setFolders(loadedFolders)
+      setProjects(loadedProjects)
+      setWatchStatuses(Object.fromEntries(loadedWatchStatuses.map((status) => [status.folder_id, status])))
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load folders")
     } finally {
@@ -59,10 +81,15 @@ export default function FoldersPage() {
     setAdding(true)
     setAddError(null)
     try {
-      const folder = await createFolder({ path: newPath.trim(), name: newName.trim() })
+      const folder = await createFolder({
+        path: newPath.trim(),
+        name: newName.trim(),
+        project_id: newProjectId || null,
+      })
       setFolders((prev) => [...prev, folder])
       setNewPath("")
       setNewName("")
+      setNewProjectId("")
       setAddOpen(false)
     } catch (e) {
       setAddError(e instanceof Error ? e.message : "Failed to add folder")
@@ -93,10 +120,51 @@ export default function FoldersPage() {
     try {
       const result = await scanFolder(id)
       setScanResult((prev) => ({ ...prev, [id]: result }))
+      const loadedWatchStatuses = await getWatchStatuses()
+      setWatchStatuses(Object.fromEntries(loadedWatchStatuses.map((status) => [status.folder_id, status])))
     } catch {
       // ignore
     } finally {
       setScanning((prev) => ({ ...prev, [id]: false }))
+    }
+  }
+
+  async function handleProjectAssign(folderId: string, projectId: string) {
+    setSavingProject((prev) => ({ ...prev, [folderId]: true }))
+    try {
+      const updatedFolder = await updateFolder(folderId, { project_id: projectId || "" })
+      setFolders((prev) => prev.map((folder) => (folder.id === folderId ? updatedFolder : folder)))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update folder project")
+    } finally {
+      setSavingProject((prev) => ({ ...prev, [folderId]: false }))
+    }
+  }
+
+  async function handleWatchToggle(folder: Folder) {
+    setSavingWatch((prev) => ({ ...prev, [folder.id]: true }))
+    try {
+      const updatedFolder = await updateFolder(folder.id, { watch_enabled: !folder.watch_enabled })
+      setFolders((prev) => prev.map((item) => (item.id === folder.id ? updatedFolder : item)))
+      const loadedWatchStatuses = await getWatchStatuses()
+      setWatchStatuses(Object.fromEntries(loadedWatchStatuses.map((status) => [status.folder_id, status])))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update watch status")
+    } finally {
+      setSavingWatch((prev) => ({ ...prev, [folder.id]: false }))
+    }
+  }
+
+  async function handleReindexAll() {
+    setReindexing(true)
+    setError(null)
+    try {
+      await reindexFolders()
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to reindex folders")
+    } finally {
+      setReindexing(false)
     }
   }
 
@@ -109,15 +177,20 @@ export default function FoldersPage() {
             Manage indexed folder paths on this device
           </p>
         </div>
-        <Dialog open={addOpen} onOpenChange={setAddOpen}>
-          <DialogTrigger
-            render={
-              <Button>
-                <Plus className="size-4 mr-1.5" />
-                Add Folder
-              </Button>
-            }
-          />
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => void handleReindexAll()} disabled={reindexing}>
+            {reindexing && <Loader2 className="size-4 mr-1.5 animate-spin" />}
+            Reindex All
+          </Button>
+          <Dialog open={addOpen} onOpenChange={setAddOpen}>
+            <DialogTrigger
+              render={
+                <Button>
+                  <Plus className="size-4 mr-1.5" />
+                  Add Folder
+                </Button>
+              }
+            />
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Add Folder</DialogTitle>
@@ -142,11 +215,26 @@ export default function FoldersPage() {
                   }}
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium mb-1.5">Project</label>
+                <select
+                  value={newProjectId}
+                  onChange={(e) => setNewProjectId(e.target.value)}
+                  className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
+                  <option value="">No project</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
               {addError && (
                 <p className="text-sm text-destructive">{addError}</p>
               )}
               <div className="flex justify-end gap-2 pt-1">
-                <DialogClose onClick={() => { setAddError(null); setNewPath(""); setNewName("") }}>
+                <DialogClose onClick={() => { setAddError(null); setNewPath(""); setNewName(""); setNewProjectId("") }}>
                   Cancel
                 </DialogClose>
                 <Button onClick={handleAdd} disabled={adding || !newPath.trim() || !newName.trim()}>
@@ -156,7 +244,8 @@ export default function FoldersPage() {
               </div>
             </div>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
 
       {error && (
@@ -189,6 +278,10 @@ export default function FoldersPage() {
                       <Badge variant={folder.is_active ? "default" : "secondary"}>
                         {folder.is_active ? "active" : "inactive"}
                       </Badge>
+                      <Badge variant={folder.watch_enabled ? "secondary" : "outline"}>
+                        {folder.watch_enabled ? "watching" : "manual"}
+                      </Badge>
+                      {folder.project_name && <Badge variant="outline">{folder.project_name}</Badge>}
                     </div>
                     <p className="text-xs text-muted-foreground truncate mt-0.5">{folder.path}</p>
                     {scanResult[folder.id] && (
@@ -198,10 +291,39 @@ export default function FoldersPage() {
                         {scanResult[folder.id].errors} errors
                       </p>
                     )}
+                    {watchStatuses[folder.id]?.last_scan_at && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Watcher last scanned {new Date(watchStatuses[folder.id].last_scan_at as string).toLocaleString()}
+                      </p>
+                    )}
+                    {watchStatuses[folder.id]?.last_error && (
+                      <p className="text-xs text-destructive mt-1">{watchStatuses[folder.id].last_error}</p>
+                    )}
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0 ml-4">
+                  <select
+                    value={folder.project_id ?? ""}
+                    onChange={(e) => void handleProjectAssign(folder.id, e.target.value)}
+                    disabled={savingProject[folder.id]}
+                    className="h-8 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  >
+                    <option value="">No project</option>
+                    {projects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void handleWatchToggle(folder)}
+                    disabled={savingWatch[folder.id]}
+                  >
+                    {savingWatch[folder.id] ? <Loader2 className="size-3.5 animate-spin" /> : folder.watch_enabled ? "Disable Watch" : "Enable Watch"}
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
