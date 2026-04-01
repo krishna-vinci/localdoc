@@ -11,16 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install uv for faster package management
 RUN pip install uv
 
-# Copy requirements and lockfile
-COPY pyproject.toml uv.lock ./
-
-# Install dependencies (all including dev for hot-reload/debug)
-RUN uv sync --frozen
+# Copy requirements and install dependencies (no dev deps)
+COPY pyproject.toml uv.lock* ./
+RUN uv sync --frozen --no-dev
 
 # Copy application code
 COPY . .
 
 EXPOSE 4320
 
-# Run with uvicorn in development mode with hot reload
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4320", "--reload"]
+# Run without --reload in production; use multiple workers
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4320", "--workers", "4"]
