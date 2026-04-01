@@ -41,3 +41,6 @@ htmlcov/
 
 # Misc
 *.log
+
+# Reference code
+memos/

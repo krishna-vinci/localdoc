@@ -15,12 +15,12 @@ RUN pip install uv
 COPY pyproject.toml .
 
 # Install dependencies
-RUN uv sync --system --frozen
+RUN uv sync --frozen
 
 # Copy application code
 COPY . .
 
-EXPOSE 8000
+EXPOSE 4320
 
 # Run with uvicorn in development mode with hot reload
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4320", "--reload"]

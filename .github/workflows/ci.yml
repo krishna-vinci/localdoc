@@ -27,19 +27,19 @@ jobs:
         run: pip install uv
 
       - name: Install backend dependencies
-        run: uv sync --system --frozen
+        run: uv sync --frozen
         working-directory: ./backend
 
       - name: Run backend linter (ruff)
-        run: ruff check .
+        run: uv run ruff check .
         working-directory: ./backend
 
       - name: Type-check backend
-        run: mypy app/
+        run: uv run mypy app/
         working-directory: ./backend
 
       - name: Run pytest
-        run: pytest --tb=short
+        run: uv run pytest --tb=short
         working-directory: ./backend
 
   # ─── Frontend Tests ───────────────────────────────────────────────────────────

@@ -45,25 +45,25 @@ LocalDocs Hub is a local-first markdown document management system. Files stay o
 ### Backend (from /home/krishna/localdoc/backend)
 ```bash
 # Install dependencies
-uv sync --system
+uv sync
 
 # Run server with hot reload
-uvicorn app.main:app --reload --port 4320
+uv run uvicorn app.main:app --reload --port 4320
 
 # Run migrations
-alembic upgrade head
+uv run alembic upgrade head
 
 # Create migration
-alembic revision --autogenerate -m "migration name"
+uv run alembic revision --autogenerate -m "migration name"
 
 # Lint
-ruff check .
+uv run ruff check .
 
 # Type-check
-mypy app/
+uv run mypy app/
 
 # Test
-pytest
+uv run pytest
 ```
 
 ### Frontend (from /home/krishna/localdoc/frontend)

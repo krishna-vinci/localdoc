@@ -25,17 +25,17 @@ build:
 	docker compose -f docker-compose.dev.yml build --no-cache
 
 backend:
-	cd backend && uv sync --system
+	cd backend && uv sync
 
 frontend:
 	cd frontend && npm install
 
 test:
-	cd backend && pytest
+	cd backend && uv run pytest
 	cd frontend && npm run type-check
 
 lint:
-	cd backend && ruff check .
+	cd backend && uv run ruff check .
 	cd frontend && npm run lint
 
 clean:

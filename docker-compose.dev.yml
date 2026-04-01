@@ -41,7 +41,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: uvicorn app.main:app --host 0.0.0.0 --port 4320 --reload
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 4320 --reload
 
   # Frontend - Next.js with hot reload
   frontend:

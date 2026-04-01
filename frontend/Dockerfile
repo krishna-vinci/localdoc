@@ -11,7 +11,7 @@ RUN npm install
 # Copy source
 COPY . .
 
-EXPOSE 3000
+EXPOSE 4321
 
 # Next.js dev server with hot reload
 CMD ["npm", "run", "dev"]
