@@ -36,9 +36,9 @@ LocalDocs Hub is a local-first markdown document management system. Files stay o
 ## Ports
 | Service   | Host Port | Container Port |
 |-----------|-----------|----------------|
-| Frontend  | 3000      | 3000           |
-| Backend   | 8000      | 8000           |
-| PostgreSQL| 5432      | 5432           |
+| Frontend  | 4321      | 4321           |
+| Backend   | 4320      | 4320           |
+| PostgreSQL| 5433      | 5432           | |
 
 ## Commands
 
@@ -48,7 +48,7 @@ LocalDocs Hub is a local-first markdown document management system. Files stay o
 uv sync --system
 
 # Run server with hot reload
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 4320
 
 # Run migrations
 alembic upgrade head

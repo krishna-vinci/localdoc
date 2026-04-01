@@ -12,7 +12,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: localdocs
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -32,16 +32,16 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/localdocs
       DEBUG: "true"
       HOST: 0.0.0.0
-      PORT: 8000
-      CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+      PORT: 4320
+      CORS_ORIGINS: http://localhost:4321
     ports:
-      - "8000:8000"
+      - "4320:4320"
     volumes:
       - ./backend:/app:rw
     depends_on:
       db:
         condition: service_healthy
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 4320 --reload
 
   # Frontend - Next.js with hot reload
   frontend:
@@ -51,10 +51,10 @@ services:
     container_name: localdocs-frontend
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: http://localhost:4320
       NODE_ENV: development
     ports:
-      - "3000:3000"
+      - "4321:4321"
     volumes:
       - ./frontend:/app:rw
     depends_on:

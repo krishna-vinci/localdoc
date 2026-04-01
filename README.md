@@ -8,9 +8,9 @@
 ```bash
 docker compose -f docker-compose.dev.yml up
 ```
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- API docs: http://localhost:8000/docs
+- Frontend: http://localhost:4321
+- Backend API: http://localhost:4320
+- API docs: http://localhost:4320/docs
 
 ### Manual Setup
 

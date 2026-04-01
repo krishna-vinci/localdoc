@@ -17,10 +17,10 @@ class Settings(BaseSettings):
 
     # Server
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    PORT: int = 4320
 
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/localdocs"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/localdocs"
     DATABASE_POOL_SIZE: int = 10
     DATABASE_MAX_OVERFLOW: int = 20
 
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     # CORS
-    CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+    CORS_ORIGINS: list[str] = ["http://localhost:4321"]
 
     # File watching
     WATCHDEBOUNCE_SECONDS: float = 0.5
