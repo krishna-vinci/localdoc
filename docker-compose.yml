@@ -30,14 +30,18 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-localdocs}
       DEBUG: "false"
+      FILESYSTEM_ROOT: /host
       HOST: 0.0.0.0
       PORT: 4320
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:4321}
     ports:
       - "4320:4320"
+    volumes:
+      - /:/host:ro
     depends_on:
       db:
         condition: service_healthy
+    command: sh -c "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 4320 --workers 4"
 
   # Frontend - Next.js production build (standalone)
   frontend:
@@ -47,6 +51,7 @@ services:
     container_name: localdocs-frontend
     restart: always
     environment:
+      INTERNAL_API_URL: ${INTERNAL_API_URL:-http://backend:4320}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4320}
       NODE_ENV: production
       PORT: 4321

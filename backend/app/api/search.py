@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import or_, select
@@ -11,10 +13,13 @@ router = APIRouter()
 
 class SearchResult(BaseModel):
     id: str
+    folder_id: str
     file_name: str
     title: str
     file_path: str
     snippet: str | None
+    tags: str | None
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -50,14 +55,21 @@ async def search_documents(
         if idx != -1:
             start = max(0, idx - 40)
             end = min(len(doc.content), idx + len(q) + 40)
-            snippet = ("..." if start > 0 else "") + doc.content[start:end] + ("..." if end < len(doc.content) else "")
+            snippet = (
+                ("..." if start > 0 else "")
+                + doc.content[start:end]
+                + ("..." if end < len(doc.content) else "")
+            )
         results.append(
             SearchResult(
                 id=doc.id,
+                folder_id=doc.folder_id,
                 file_name=doc.file_name,
                 title=doc.title,
                 file_path=doc.file_path,
                 snippet=snippet,
+                tags=doc.tags,
+                updated_at=doc.updated_at,
             )
         )
     return results

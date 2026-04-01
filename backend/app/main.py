@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import documents, folders, search, sync
+from app.api import documents, folders, search, stats, sync
 from app.core.config import settings
 
 
@@ -25,6 +25,7 @@ def create_app() -> FastAPI:
     app.include_router(documents.router, prefix="/api/v1/documents", tags=["documents"])
     app.include_router(search.router, prefix="/api/v1/search", tags=["search"])
     app.include_router(sync.router, prefix="/api/v1/sync", tags=["sync"])
+    app.include_router(stats.router, prefix="/api/v1/stats", tags=["stats"])
 
     @app.get("/health")
     async def health() -> dict[str, str]:

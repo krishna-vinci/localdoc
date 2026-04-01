@@ -35,6 +35,7 @@ class Settings(BaseSettings):
 
     # File watching
     WATCHDEBOUNCE_SECONDS: float = 0.5
+    FILESYSTEM_ROOT: str = ""
 
 
 @lru_cache

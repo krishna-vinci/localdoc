@@ -9,7 +9,7 @@ class FolderBase(BaseModel):
 
 
 class FolderCreate(FolderBase):
-    device_id: str = Field(..., max_length=255)
+    device_id: str = Field(default="local", max_length=255)
 
 
 class FolderUpdate(BaseModel):

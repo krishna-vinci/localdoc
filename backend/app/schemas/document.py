@@ -26,8 +26,14 @@ class DocumentResponse(DocumentBase):
     model_config = {"from_attributes": True}
 
 
+class DocumentUpdate(BaseModel):
+    title: str | None = Field(None, max_length=512)
+    tags: str | None = None
+
+
 class DocumentListResponse(BaseModel):
     id: str
+    folder_id: str
     file_name: str
     title: str
     tags: str | None

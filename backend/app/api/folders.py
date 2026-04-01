@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.folder import Folder
 from app.schemas.folder import FolderCreate, FolderResponse, FolderUpdate
+from app.services.scanner import scan_folder
 
 router = APIRouter()
 
@@ -66,3 +67,18 @@ async def delete_folder(folder_id: str, db: AsyncSession = Depends(get_db)) -> N
         raise HTTPException(status_code=404, detail="Folder not found")
     await db.delete(folder)
     await db.commit()
+
+
+@router.post("/{folder_id}/scan", status_code=status.HTTP_200_OK)
+async def scan_folder_endpoint(
+    folder_id: str, db: AsyncSession = Depends(get_db)
+) -> dict[str, int]:
+    result = await db.execute(select(Folder).where(Folder.id == folder_id))
+    folder = result.scalar_one_or_none()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    try:
+        summary = await scan_folder(folder, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return summary
