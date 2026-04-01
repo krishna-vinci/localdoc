@@ -1,9 +1,17 @@
+from __future__ import annotations
+
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import uuid4
-from sqlalchemy import String, DateTime, Text, Boolean, ForeignKey, Index
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.folder import Folder
 
 
 class Document(Base):
@@ -33,7 +41,7 @@ class Document(Base):
     )
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    folder: Mapped["Folder"] = relationship("Folder", back_populates="documents")
+    folder: Mapped[Folder] = relationship("Folder", back_populates="documents")
 
     __table_args__ = (
         Index("ix_documents_folder_id", "folder_id"),

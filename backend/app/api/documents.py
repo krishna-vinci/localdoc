@@ -1,9 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from collections.abc import Sequence
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+
 from app.core.database import get_db
 from app.models.document import Document
-from app.schemas.document import DocumentResponse, DocumentListResponse
+from app.schemas.document import DocumentListResponse, DocumentResponse
 
 router = APIRouter()
 
@@ -14,8 +17,8 @@ async def list_documents(
     folder_id: str | None = None,
     skip: int = 0,
     limit: int = 50,
-):
-    query = select(Document).where(Document.is_deleted == False)
+) -> Sequence[Document]:
+    query = select(Document).where(Document.is_deleted.is_(False))
     if folder_id:
         query = query.where(Document.folder_id == folder_id)
     query = query.offset(skip).limit(limit).order_by(Document.updated_at.desc())
@@ -24,9 +27,9 @@ async def list_documents(
 
 
 @router.get("/{doc_id}", response_model=DocumentResponse)
-async def get_document(doc_id: str, db: AsyncSession = Depends(get_db)):
+async def get_document(doc_id: str, db: AsyncSession = Depends(get_db)) -> Document:
     result = await db.execute(
-        select(Document).where(Document.id == doc_id, Document.is_deleted == False)
+        select(Document).where(Document.id == doc_id, Document.is_deleted.is_(False))
     )
     doc = result.scalar_one_or_none()
     if not doc:

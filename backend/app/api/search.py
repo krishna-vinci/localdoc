@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+
 from app.core.database import get_db
 from app.models.document import Document
-from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -23,12 +24,12 @@ async def search_documents(
     db: AsyncSession = Depends(get_db),
     q: str = Query(..., min_length=1, max_length=200),
     limit: int = Query(20, ge=1, le=100),
-):
+) -> list[SearchResult]:
     pattern = f"%{q}%"
     query = (
         select(Document)
         .where(
-            Document.is_deleted == False,
+            Document.is_deleted.is_(False),
             or_(
                 Document.title.ilike(pattern),
                 Document.content.ilike(pattern),

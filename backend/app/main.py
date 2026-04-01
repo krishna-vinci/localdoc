@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.api import documents, folders, search, sync
 from app.core.config import settings
-from app.api import folders, documents, search, sync
 
 
 def create_app() -> FastAPI:
@@ -26,7 +27,7 @@ def create_app() -> FastAPI:
     app.include_router(sync.router, prefix="/api/v1/sync", tags=["sync"])
 
     @app.get("/health")
-    async def health():
+    async def health() -> dict[str, str]:
         return {"status": "healthy", "version": settings.APP_VERSION}
 
     return app
