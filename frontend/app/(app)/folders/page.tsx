@@ -26,6 +26,7 @@ import {
   scanFolder,
   updateFolder,
 } from "@/lib/api"
+import { formatTimestamp } from "@/lib/format"
 import type { Folder, Project, ScanSummary, WatchStatus } from "@/types"
 
 export default function FoldersPage() {
@@ -170,14 +171,14 @@ export default function FoldersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Folders</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Manage indexed folder paths on this device
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button variant="outline" onClick={() => void handleReindexAll()} disabled={reindexing}>
             {reindexing && <Loader2 className="size-4 mr-1.5 animate-spin" />}
             Reindex All
@@ -191,11 +192,11 @@ export default function FoldersPage() {
                 </Button>
               }
             />
-          <DialogContent>
+          <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>Add Folder</DialogTitle>
             </DialogHeader>
-            <div className="space-y-3">
+         <div className="space-y-3">
               <div>
                 <label className="block text-sm font-medium mb-1.5">Folder path</label>
                 <Input
@@ -268,9 +269,9 @@ export default function FoldersPage() {
       ) : (
         <div className="space-y-3">
           {folders.map((folder) => (
-            <Card key={folder.id}>
-              <CardContent className="flex items-center justify-between py-4 px-5">
-                <div className="flex items-center gap-3 min-w-0">
+              <Card key={folder.id}>
+               <CardContent className="flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+                 <div className="flex min-w-0 items-center gap-3">
                   <FolderOpen className="size-5 shrink-0 text-muted-foreground" />
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
@@ -293,7 +294,7 @@ export default function FoldersPage() {
                     )}
                     {watchStatuses[folder.id]?.last_scan_at && (
                       <p className="text-xs text-muted-foreground mt-1">
-                        Watcher last scanned {new Date(watchStatuses[folder.id].last_scan_at as string).toLocaleString()}
+                        Watcher last scanned {formatTimestamp(watchStatuses[folder.id].last_scan_at as string)}
                       </p>
                     )}
                     {watchStatuses[folder.id]?.last_error && (
@@ -302,13 +303,13 @@ export default function FoldersPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0 ml-4">
-                  <select
-                    value={folder.project_id ?? ""}
-                    onChange={(e) => void handleProjectAssign(folder.id, e.target.value)}
-                    disabled={savingProject[folder.id]}
-                    className="h-8 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                  >
+                 <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap lg:w-auto lg:justify-end lg:gap-2">
+                   <select
+                     value={folder.project_id ?? ""}
+                     onChange={(e) => void handleProjectAssign(folder.id, e.target.value)}
+                     disabled={savingProject[folder.id]}
+                     className="h-8 rounded-lg border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 sm:min-w-40"
+                   >
                     <option value="">No project</option>
                     {projects.map((project) => (
                       <option key={project.id} value={project.id}>
@@ -316,20 +317,22 @@ export default function FoldersPage() {
                       </option>
                     ))}
                   </select>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void handleWatchToggle(folder)}
-                    disabled={savingWatch[folder.id]}
-                  >
+                   <Button
+                     variant="ghost"
+                     size="sm"
+                     className="justify-center"
+                     onClick={() => void handleWatchToggle(folder)}
+                     disabled={savingWatch[folder.id]}
+                   >
                     {savingWatch[folder.id] ? <Loader2 className="size-3.5 animate-spin" /> : folder.watch_enabled ? "Disable Watch" : "Enable Watch"}
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void handleScan(folder.id)}
-                    disabled={scanning[folder.id]}
-                  >
+                   <Button
+                     variant="outline"
+                     size="sm"
+                     className="justify-center"
+                     onClick={() => void handleScan(folder.id)}
+                     disabled={scanning[folder.id]}
+                   >
                     {scanning[folder.id] ? (
                       <Loader2 className="size-3.5 animate-spin mr-1.5" />
                     ) : (
@@ -337,12 +340,13 @@ export default function FoldersPage() {
                     )}
                     Scan
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => void handleDelete(folder.id)}
-                    disabled={deleting[folder.id]}
-                    aria-label={`Delete ${folder.name}`}
+                   <Button
+                     variant="ghost"
+                     size="icon"
+                     className="self-end lg:self-auto"
+                     onClick={() => void handleDelete(folder.id)}
+                     disabled={deleting[folder.id]}
+                     aria-label={`Delete ${folder.name}`}
                   >
                     {deleting[folder.id] ? (
                       <Loader2 className="size-3.5 animate-spin" />

@@ -2,6 +2,9 @@ import type {
   Document,
   DocumentFilters,
   DocumentListItem,
+  DocumentVersionDetail,
+  DocumentVersionSummary,
+  DocumentWriteEvent,
   Folder,
   FolderCreate,
   Project,
@@ -138,6 +141,42 @@ export async function getDocuments(filters: DocumentFilters = {}): Promise<Docum
 
 export async function getDocument(id: string): Promise<Document> {
   return apiFetch<Document>(`/api/v1/documents/${id}`)
+}
+
+export async function saveDocument(
+  id: string,
+  data: { raw_content: string; expected_content_hash: string; message?: string | null }
+): Promise<Document> {
+  return apiFetch<Document>(`/api/v1/documents/${id}/content`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  })
+}
+
+export async function getDocumentVersions(id: string): Promise<DocumentVersionSummary[]> {
+  return apiFetch<DocumentVersionSummary[]>(`/api/v1/documents/${id}/versions`)
+}
+
+export async function getDocumentVersion(
+  id: string,
+  versionId: string
+): Promise<DocumentVersionDetail> {
+  return apiFetch<DocumentVersionDetail>(`/api/v1/documents/${id}/versions/${versionId}`)
+}
+
+export async function restoreDocumentVersion(
+  id: string,
+  versionId: string,
+  data: { expected_content_hash: string; message?: string | null }
+): Promise<Document> {
+  return apiFetch<Document>(`/api/v1/documents/${id}/restore/${versionId}`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+export async function getDocumentAudit(id: string): Promise<DocumentWriteEvent[]> {
+  return apiFetch<DocumentWriteEvent[]>(`/api/v1/documents/${id}/audit`)
 }
 
 export async function getOrphanDocuments(limit = 20): Promise<DocumentListItem[]> {

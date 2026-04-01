@@ -92,7 +92,7 @@ export default function SearchPage() {
         />
       </div>
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <select
           value={selectedProjectId}
           onChange={(e) => { setSelectedProjectId(e.target.value); setSelectedFolderId("") }}

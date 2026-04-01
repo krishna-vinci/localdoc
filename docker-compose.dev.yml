@@ -39,7 +39,7 @@ services:
       - "4320:4320"
     volumes:
       - ./backend:/app:rw
-      - /:/host:ro
+      - /:/host:rw
     depends_on:
       db:
         condition: service_healthy

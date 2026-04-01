@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { getDocuments, getFolders, getProjects, searchDocuments } from "@/lib/api"
+import { formatDate } from "@/lib/format"
 import type { DocumentListItem, Folder, Project, SearchResult } from "@/types"
 
 type ListItem = DocumentListItem | SearchResult
@@ -119,7 +120,7 @@ export default function DocumentsPage() {
         />
       </div>
 
-      <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <select
           value={selectedProjectId}
           onChange={(e) => { setSelectedProjectId(e.target.value); setSelectedFolderId("") }}
@@ -192,7 +193,7 @@ export default function DocumentsPage() {
               <Link key={item.id} href={`/documents/${item.id}`}>
                 <Card className="hover:bg-muted/50 transition-colors cursor-pointer">
                   <CardContent className="py-3 px-4">
-                    <div className="flex items-start justify-between gap-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
                       <div className="flex items-start gap-3 min-w-0">
                         <FileText className="size-4 shrink-0 text-muted-foreground mt-0.5" />
                         <div className="min-w-0">
@@ -217,8 +218,8 @@ export default function DocumentsPage() {
                           )}
                         </div>
                       </div>
-                      <time className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">
-                        {new Date(item.updated_at).toLocaleDateString()}
+                      <time className="text-xs text-muted-foreground shrink-0 whitespace-nowrap sm:text-right">
+                        {formatDate(item.updated_at)}
                       </time>
                     </div>
                   </CardContent>

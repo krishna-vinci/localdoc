@@ -12,6 +12,8 @@ from app.core.database import Base
 
 if TYPE_CHECKING:
     from app.models.folder import Folder
+    from app.models.document_audit import DocumentWriteEvent
+    from app.models.document_version import DocumentVersion
 
 
 class Document(Base):
@@ -45,8 +47,15 @@ class Document(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    version_counter: Mapped[int] = mapped_column(Integer, default=0)
 
     folder: Mapped[Folder] = relationship("Folder", back_populates="documents")
+    versions: Mapped[list[DocumentVersion]] = relationship(
+        "DocumentVersion", back_populates="document", cascade="all, delete-orphan"
+    )
+    write_events: Mapped[list[DocumentWriteEvent]] = relationship(
+        "DocumentWriteEvent", back_populates="document", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_documents_folder_id", "folder_id"),

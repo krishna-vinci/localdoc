@@ -82,7 +82,7 @@ export default async function DashboardPage() {
 
       <div className="grid gap-6 xl:grid-cols-3">
         <section className="space-y-4 xl:col-span-1">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-semibold">Recent Documents</h2>
             <Link href="/documents" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               View all →
@@ -117,7 +117,7 @@ export default async function DashboardPage() {
         </section>
 
         <section className="space-y-4 xl:col-span-1">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-semibold">Orphan Documents</h2>
             <Link href="/documents?orphaned=true" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               Review →
@@ -144,7 +144,7 @@ export default async function DashboardPage() {
         </section>
 
         <section className="space-y-4 xl:col-span-1">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-semibold">Duplicate Candidates</h2>
             <Link href="/documents" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               Inspect →

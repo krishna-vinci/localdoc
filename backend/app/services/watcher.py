@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select
+from watchfiles import DefaultFilter, awatch
 
 from app.core.config import settings
 from app.core.database import async_session_maker
 from app.models.folder import Folder
-from app.services.scanner import _resolve_scan_base_path, scan_folder
+from app.services.scanner import _resolve_scan_base_path, scan_folder, sync_document_from_filesystem
 
 
 @dataclass
@@ -30,108 +30,200 @@ def _utcnow_iso() -> str:
     return datetime.utcnow().isoformat()
 
 
-def _snapshot_folder(folder_path: Path) -> tuple[tuple[str, int, int], ...]:
-    items: list[tuple[str, int, int]] = []
-    for root, dirs, files in os.walk(folder_path):
-        dirs[:] = [directory for directory in dirs if not directory.startswith(".")]
-        for file_name in files:
-            if not (file_name.endswith(".md") or file_name.endswith(".markdown")):
-                continue
-            file_path = Path(root) / file_name
-            stat = file_path.stat()
-            items.append((str(file_path), stat.st_mtime_ns, stat.st_size))
-    items.sort(key=lambda item: item[0])
-    return tuple(items)
+class MarkdownWatchFilter(DefaultFilter):
+    def __call__(self, change: object, path: str) -> bool:
+        if not super().__call__(change, path):
+            return False
+        return path.endswith(".md") or path.endswith(".markdown")
 
 
 class FolderWatcher:
     def __init__(self) -> None:
-        self._task: asyncio.Task[None] | None = None
-        self._snapshots: dict[str, tuple[tuple[str, int, int], ...]] = {}
+        self._started = False
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._stop_events: dict[str, asyncio.Event] = {}
+        self._watched_paths: dict[str, str] = {}
         self._statuses: dict[str, FolderWatchStatus] = {}
         self._lock = asyncio.Lock()
+        self._watch_filter = MarkdownWatchFilter()
 
     async def start(self) -> None:
-        if self._task and not self._task.done():
+        if self._started:
             return
-        self._task = asyncio.create_task(self._run(), name="folder-watcher")
+        self._started = True
+        await self.refresh_from_database()
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+        self._started = False
+        for folder_id in list(self._tasks.keys()):
+            await self._stop_folder_task(folder_id)
+
+    async def refresh_from_database(self) -> None:
+        async with async_session_maker() as session:
+            result = await session.execute(select(Folder).order_by(Folder.name.asc()))
+            folders = result.scalars().all()
+
+        current_folder_ids = {folder.id for folder in folders}
+        for folder_id in list(self._statuses.keys()):
+            if folder_id not in current_folder_ids:
+                await self._remove_folder(folder_id)
+
+        for folder in folders:
+            await self._sync_folder(folder)
 
     async def get_statuses(self) -> list[dict[str, str | bool | None]]:
         async with self._lock:
-            return [asdict(status) for status in self._statuses.values()]
+            statuses = sorted(self._statuses.values(), key=lambda status: status.folder_name.lower())
+            return [asdict(status) for status in statuses]
 
     async def force_rescan_all(self) -> dict[str, int]:
         async with async_session_maker() as session:
-            result = await session.execute(
-                select(Folder).where(Folder.is_active.is_(True), Folder.watch_enabled.is_(True))
-            )
+            result = await session.execute(select(Folder).where(Folder.is_active.is_(True)))
             folders = result.scalars().all()
             summary = {"indexed": 0, "skipped": 0, "errors": 0, "folders": len(folders)}
             for folder in folders:
-                scan_summary = await scan_folder(folder, session)
-                summary["indexed"] += scan_summary["indexed"]
-                summary["skipped"] += scan_summary["skipped"]
-                summary["errors"] += scan_summary["errors"]
-                await self._update_status(folder, last_event=True, last_scan=True)
+                try:
+                    scan_summary = await scan_folder(folder, session)
+                    summary["indexed"] += scan_summary["indexed"]
+                    summary["skipped"] += scan_summary["skipped"]
+                    summary["errors"] += scan_summary["errors"]
+                    await self.mark_scan_result(folder, error=None)
+                except Exception as exc:
+                    summary["errors"] += 1
+                    await self.mark_scan_result(folder, error=str(exc))
             return summary
 
-    async def _run(self) -> None:
-        while True:
+    async def mark_scan_result(self, folder: Folder, *, error: str | None) -> None:
+        await self._update_status(folder, last_scan=error is None, error=error)
+
+    async def _remove_folder(self, folder_id: str) -> None:
+        await self._stop_folder_task(folder_id)
+        async with self._lock:
+            self._statuses.pop(folder_id, None)
+            self._watched_paths.pop(folder_id, None)
+
+    async def _sync_folder(self, folder: Folder) -> None:
+        await self._update_status(folder)
+
+        if not self._started:
+            return
+
+        if not folder.is_active or not folder.watch_enabled:
+            await self._stop_folder_task(folder.id)
+            return
+
+        try:
+            resolved_path = _resolve_scan_base_path(folder.path)
+            if not resolved_path.exists() or not resolved_path.is_dir():
+                raise ValueError(f"Path does not exist or is not a directory: {folder.path}")
+        except Exception as exc:
+            await self._stop_folder_task(folder.id)
+            await self._update_status(folder, error=str(exc))
+            return
+
+        current_path = self._watched_paths.get(folder.id)
+        if folder.id in self._tasks and current_path == str(resolved_path):
+            return
+
+        await self._stop_folder_task(folder.id)
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(
+            self._watch_folder(folder.id, str(resolved_path), stop_event),
+            name=f"folder-watcher-{folder.id}",
+        )
+        async with self._lock:
+            self._stop_events[folder.id] = stop_event
+            self._tasks[folder.id] = task
+            self._watched_paths[folder.id] = str(resolved_path)
+
+    async def _stop_folder_task(self, folder_id: str) -> None:
+        async with self._lock:
+            stop_event = self._stop_events.pop(folder_id, None)
+            task = self._tasks.pop(folder_id, None)
+            self._watched_paths.pop(folder_id, None)
+
+        if stop_event is not None:
+            stop_event.set()
+        if task is not None:
+            task.cancel()
             try:
-                await self._tick()
+                await task
             except asyncio.CancelledError:
-                raise
-            except Exception:
-                await asyncio.sleep(settings.WATCH_POLL_SECONDS)
-            await asyncio.sleep(settings.WATCH_POLL_SECONDS)
+                pass
 
-    async def _tick(self) -> None:
+    async def _watch_folder(self, folder_id: str, resolved_path: str, stop_event: asyncio.Event) -> None:
+        try:
+            await self._scan_folder(folder_id, mark_event=False)
+            debounce_ms = max(int(settings.WATCHDEBOUNCE_SECONDS * 1000), 100)
+            async for changes in awatch(
+                resolved_path,
+                watch_filter=self._watch_filter,
+                debounce=debounce_ms,
+                stop_event=stop_event,
+                force_polling=False,
+            ):
+                if not changes:
+                    continue
+                changed_paths = {Path(path) for _, path in changes}
+                await self._sync_changed_paths(folder_id, changed_paths)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self._mark_folder_error(folder_id, str(exc))
+
+    async def _scan_folder(self, folder_id: str, *, mark_event: bool) -> None:
         async with async_session_maker() as session:
-            result = await session.execute(select(Folder))
-            folders = result.scalars().all()
+            folder = await session.get(Folder, folder_id)
+            if folder is None:
+                return
+            if not folder.is_active or not folder.watch_enabled:
+                return
 
-            active_folder_ids = {folder.id for folder in folders}
-            async with self._lock:
-                for folder_id in list(self._statuses.keys()):
-                    if folder_id not in active_folder_ids:
-                        self._statuses.pop(folder_id, None)
-                        self._snapshots.pop(folder_id, None)
+            try:
+                await scan_folder(folder, session)
+                await self._update_status(folder, last_event=mark_event, last_scan=True, error=None)
+            except Exception as exc:
+                await self._update_status(folder, last_event=mark_event, error=str(exc))
 
-            for folder in folders:
-                await self._update_status(folder)
+    async def _sync_changed_paths(self, folder_id: str, changed_paths: set[Path]) -> None:
+        async with async_session_maker() as session:
+            folder = await session.get(Folder, folder_id)
+            if folder is None:
+                return
+            if not folder.is_active or not folder.watch_enabled:
+                return
 
-                if not folder.is_active or not folder.watch_enabled:
-                    continue
+            base_path = _resolve_scan_base_path(folder.path)
+            indexed = 0
+            skipped = 0
+            errors = 0
 
+            for changed_path in changed_paths:
                 try:
-                    base_path = _resolve_scan_base_path(folder.path)
-                    snapshot = await asyncio.to_thread(_snapshot_folder, base_path)
-                except Exception as exc:
-                    await self._update_status(folder, error=str(exc))
-                    continue
+                    if changed_path.is_relative_to(base_path):
+                        summary = await sync_document_from_filesystem(
+                            folder,
+                            session,
+                            absolute_path=changed_path,
+                        )
+                        indexed += summary["indexed"]
+                        skipped += summary["skipped"]
+                        errors += summary["errors"]
+                except Exception:
+                    errors += 1
 
-                previous_snapshot = self._snapshots.get(folder.id)
-                needs_initial_scan = previous_snapshot is None
-                snapshot_changed = previous_snapshot is not None and previous_snapshot != snapshot
-                self._snapshots[folder.id] = snapshot
+            await self._update_status(
+                folder,
+                last_event=True,
+                last_scan=indexed > 0 or skipped > 0,
+                error=None if errors == 0 else f"Failed to sync {errors} changed file(s)",
+            )
 
-                if not needs_initial_scan and not snapshot_changed:
-                    continue
-
-                try:
-                    await scan_folder(folder, session)
-                    await self._update_status(folder, last_event=True, last_scan=True, error=None)
-                except Exception as exc:
-                    await self._update_status(folder, error=str(exc))
+    async def _mark_folder_error(self, folder_id: str, error: str) -> None:
+        async with async_session_maker() as session:
+            folder = await session.get(Folder, folder_id)
+            if folder is not None:
+                await self._update_status(folder, error=error)
 
     async def _update_status(
         self,
@@ -151,14 +243,15 @@ class FolderWatcher:
                     watch_enabled=folder.watch_enabled,
                 ),
             )
+            now_iso = _utcnow_iso()
             current.folder_name = folder.name
             current.active = folder.is_active
             current.watch_enabled = folder.watch_enabled
-            current.last_checked_at = _utcnow_iso()
+            current.last_checked_at = now_iso
             if last_event:
-                current.last_event_at = _utcnow_iso()
+                current.last_event_at = now_iso
             if last_scan:
-                current.last_scan_at = _utcnow_iso()
+                current.last_scan_at = now_iso
             current.last_error = error
             self._statuses[folder.id] = current
 

@@ -44,3 +44,6 @@ htmlcov/
 
 # Reference code
 memos/
+
+# Local working reports
+docs/implementation-status.md

@@ -88,7 +88,7 @@ export default function ProjectsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
           <p className="text-sm text-muted-foreground mt-1">
@@ -105,7 +105,7 @@ export default function ProjectsPage() {
               </Button>
             }
           />
-          <DialogContent className="max-w-xl">
+          <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-xl">
             <DialogHeader>
               <DialogTitle>Create Project</DialogTitle>
             </DialogHeader>
@@ -186,7 +186,7 @@ export default function ProjectsPage() {
           {projects.map((project) => (
             <Card key={project.id}>
               <CardContent className="py-4 px-5">
-                <div className="flex items-start justify-between gap-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div className="space-y-2 min-w-0">
                     <div>
                       <p className="text-sm font-medium">{project.name}</p>
@@ -205,6 +205,7 @@ export default function ProjectsPage() {
                   <Button
                     variant="ghost"
                     size="icon"
+                    className="self-end sm:self-auto"
                     aria-label={`Delete ${project.name}`}
                     onClick={() => void handleDelete(project.id)}
                     disabled={deleting[project.id]}

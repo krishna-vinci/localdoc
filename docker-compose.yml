@@ -37,7 +37,7 @@ services:
     ports:
       - "4320:4320"
     volumes:
-      - /:/host:ro
+      - /:/host:rw
     depends_on:
       db:
         condition: service_healthy

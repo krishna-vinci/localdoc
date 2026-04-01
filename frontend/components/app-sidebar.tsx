@@ -14,34 +14,57 @@ const navItems = [
   { href: "/search", icon: Search, label: "Search" },
 ]
 
-export function AppSidebar() {
+interface AppSidebarProps {
+  collapsed?: boolean
+  mobile?: boolean
+  onNavigate?: () => void
+}
+
+export function AppSidebar({
+  collapsed = false,
+  mobile = false,
+  onNavigate,
+}: AppSidebarProps) {
   const pathname = usePathname()
+  const compact = collapsed && !mobile
 
   return (
-    <aside className="flex h-full w-56 flex-col border-r border-sidebar-border bg-sidebar">
-      {/* Logo */}
-      <div className="flex h-14 items-center gap-2.5 border-b border-sidebar-border px-4">
-        <FileText className="size-5 text-sidebar-primary" />
-        <span className="font-semibold text-sidebar-foreground">LocalDocs Hub</span>
+    <aside
+      className={cn(
+        "flex h-full shrink-0 flex-col border-r border-sidebar-border bg-sidebar transition-[width] duration-200",
+        compact ? "w-[4.5rem]" : "w-64",
+        mobile && "h-dvh w-full"
+      )}
+    >
+      <div
+        className={cn(
+          "flex h-14 items-center border-b border-sidebar-border",
+          compact ? "justify-center px-2" : "gap-2.5 px-4"
+        )}
+      >
+        <FileText className="size-5 shrink-0 text-sidebar-primary" />
+        {!compact && <span className="font-semibold text-sidebar-foreground">LocalDocs Hub</span>}
       </div>
 
-      {/* Nav */}
-      <nav className="flex flex-1 flex-col gap-0.5 p-2 pt-3">
+      <nav className="flex flex-1 flex-col gap-1 p-2 pt-3">
         {navItems.map(({ href, icon: Icon, label }) => {
           const active = pathname === href || (href !== "/" && pathname.startsWith(href))
           return (
             <Link
               key={href}
               href={href}
+              title={compact ? label : undefined}
+              onClick={onNavigate}
               className={cn(
-                "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                "flex items-center rounded-lg text-sm font-medium transition-colors",
+                compact ? "justify-center px-2 py-2.5" : "gap-2.5 px-3 py-2",
                 active
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
                   : "text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
               )}
             >
               <Icon className="size-4 shrink-0" />
-              {label}
+              {!compact && <span>{label}</span>}
             </Link>
           )
         })}

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +24,21 @@ def _utcnow() -> datetime:
 
 def _compute_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+@dataclass(slots=True)
+class ParsedMarkdownDocument:
+    raw_content: str
+    body_content: str
+    content_hash: str
+    title: str
+    frontmatter: str | None
+    tags: str | None
+    status: str | None
+    headings: str | None
+    links: str | None
+    tasks: str | None
+    task_count: int
 
 
 def _extract_title(post: frontmatter.Post, file_stem: str) -> str:
@@ -108,13 +125,158 @@ def _resolve_scan_base_path(folder_path: str) -> Path:
     return filesystem_root / relative_path
 
 
+def resolve_document_file_path(folder: Folder, file_path: str) -> Path:
+    base_path = _resolve_scan_base_path(folder.path)
+    relative_path = Path(file_path).relative_to(Path(folder.path))
+    return base_path / relative_path
+
+
+def parse_markdown_document(raw_text: str, *, file_stem: str) -> ParsedMarkdownDocument:
+    post = frontmatter.loads(raw_text)
+    tasks, task_count = _extract_tasks(post.content)
+    return ParsedMarkdownDocument(
+        raw_content=raw_text,
+        body_content=post.content,
+        content_hash=_compute_hash(raw_text),
+        title=_extract_title(post, file_stem),
+        frontmatter=_frontmatter_to_json(post),
+        tags=_extract_tags(post),
+        status=_extract_status(post),
+        headings=_extract_headings(post.content),
+        links=_extract_links(post.content),
+        tasks=tasks,
+        task_count=task_count,
+    )
+
+
+def apply_parsed_document(
+    doc: Document,
+    parsed: ParsedMarkdownDocument,
+    *,
+    size_bytes: int,
+    indexed_at: datetime | None = None,
+) -> None:
+    now = _utcnow()
+    doc.title = parsed.title
+    doc.content = parsed.body_content
+    doc.content_hash = parsed.content_hash
+    doc.frontmatter = parsed.frontmatter
+    doc.tags = parsed.tags
+    doc.status = parsed.status
+    doc.headings = parsed.headings
+    doc.links = parsed.links
+    doc.tasks = parsed.tasks
+    doc.task_count = parsed.task_count
+    doc.size_bytes = size_bytes
+    doc.is_deleted = False
+    doc.indexed_at = indexed_at or now
+    doc.updated_at = now
+
+
+def _collect_markdown_files(base_path: Path) -> list[Path]:
+    file_paths: list[Path] = []
+    for root, dirs, files in os.walk(base_path):
+        dirs[:] = [directory for directory in dirs if not directory.startswith(".")]
+        for file_name in files:
+            if file_name.endswith(".md") or file_name.endswith(".markdown"):
+                file_paths.append(Path(root) / file_name)
+    return file_paths
+
+
+async def _read_file_text(file_path: Path) -> str:
+    return await asyncio.to_thread(file_path.read_text, encoding="utf-8", errors="replace")
+
+
+async def _stat_file(file_path: Path) -> os.stat_result:
+    return await asyncio.to_thread(file_path.stat)
+
+
+async def upsert_document_from_file(
+    folder: Folder,
+    db: AsyncSession,
+    *,
+    file_path_obj: Path,
+    base_path: Path | None = None,
+) -> str:
+    base_scan_path = base_path or _resolve_scan_base_path(folder.path)
+    relative_file_path = file_path_obj.relative_to(base_scan_path)
+    file_path_str = str(Path(folder.path) / relative_file_path)
+
+    result = await db.execute(select(Document).where(Document.folder_id == folder.id, Document.file_path == file_path_str))
+    doc = result.scalar_one_or_none()
+
+    raw_text = await _read_file_text(file_path_obj)
+    parsed = parse_markdown_document(raw_text, file_stem=file_path_obj.stem)
+    stat = await _stat_file(file_path_obj)
+
+    if doc is None:
+        doc = Document(
+            folder_id=folder.id,
+            file_path=file_path_str,
+            file_name=file_path_obj.name,
+            size_bytes=stat.st_size,
+            device_id=folder.device_id,
+        )
+        db.add(doc)
+        apply_parsed_document(doc, parsed, size_bytes=stat.st_size)
+        return "indexed"
+
+    if doc.content_hash == parsed.content_hash and not doc.is_deleted:
+        return "skipped"
+
+    doc.file_name = file_path_obj.name
+    apply_parsed_document(doc, parsed, size_bytes=stat.st_size)
+    return "indexed"
+
+
+async def mark_document_deleted(folder: Folder, db: AsyncSession, *, file_path_str: str) -> bool:
+    result = await db.execute(select(Document).where(Document.folder_id == folder.id, Document.file_path == file_path_str))
+    doc = result.scalar_one_or_none()
+    if doc is None or doc.is_deleted:
+        return False
+    doc.is_deleted = True
+    doc.updated_at = _utcnow()
+    doc.indexed_at = _utcnow()
+    return True
+
+
+async def sync_document_from_filesystem(
+    folder: Folder,
+    db: AsyncSession,
+    *,
+    absolute_path: Path,
+) -> dict[str, int]:
+    base_path = _resolve_scan_base_path(folder.path)
+    relative_file_path = absolute_path.relative_to(base_path)
+    file_path_str = str(Path(folder.path) / relative_file_path)
+    summary = {"indexed": 0, "skipped": 0, "errors": 0}
+
+    try:
+        file_exists = await asyncio.to_thread(absolute_path.exists)
+        if file_exists:
+            result = await upsert_document_from_file(folder, db, file_path_obj=absolute_path, base_path=base_path)
+            summary[result] += 1
+        elif await mark_document_deleted(folder, db, file_path_str=file_path_str):
+            summary["indexed"] += 1
+        else:
+            summary["skipped"] += 1
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        summary["errors"] += 1
+
+    return summary
+
+
 async def scan_folder(folder: Folder, db: AsyncSession) -> dict[str, int]:
     """
     Walk *folder.path* recursively, index every *.md / *.markdown file.
     Returns a summary dict: {"indexed": n, "skipped": n, "errors": n}.
     """
     base_path = _resolve_scan_base_path(folder.path)
-    if not base_path.exists() or not base_path.is_dir():
+    path_exists = await asyncio.to_thread(base_path.exists)
+    path_is_dir = await asyncio.to_thread(base_path.is_dir)
+    if not path_exists or not path_is_dir:
         raise ValueError(f"Path does not exist or is not a directory: {folder.path}")
 
     summary: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
@@ -129,75 +291,23 @@ async def scan_folder(folder: Folder, db: AsyncSession) -> dict[str, int]:
         doc.file_path: doc for doc in existing_result.scalars().all()
     }
     seen_paths: set[str] = set()
+    file_paths = await asyncio.to_thread(_collect_markdown_files, base_path)
 
-    for root, dirs, files in os.walk(base_path):
-        # Skip hidden directories
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
-        for file_name in files:
-            if not (file_name.endswith(".md") or file_name.endswith(".markdown")):
-                continue
-            file_path_obj = Path(root) / file_name
-            relative_file_path = file_path_obj.relative_to(base_path)
-            file_path_str = str(Path(folder.path) / relative_file_path)
-            seen_paths.add(file_path_str)
+    for file_path_obj in file_paths:
+        relative_file_path = file_path_obj.relative_to(base_path)
+        file_path_str = str(Path(folder.path) / relative_file_path)
+        seen_paths.add(file_path_str)
 
-            try:
-                raw_text = file_path_obj.read_text(encoding="utf-8", errors="replace")
-                post = frontmatter.loads(raw_text)
-                content_hash = _compute_hash(raw_text)
-                title = _extract_title(post, file_path_obj.stem)
-                tags = _extract_tags(post)
-                status = _extract_status(post)
-                headings = _extract_headings(post.content)
-                links = _extract_links(post.content)
-                tasks, task_count = _extract_tasks(post.content)
-                fm_json = _frontmatter_to_json(post)
-                size_bytes = file_path_obj.stat().st_size
-
-                if file_path_str in existing_docs:
-                    doc = existing_docs[file_path_str]
-                    if doc.content_hash == content_hash:
-                        summary["skipped"] += 1
-                        continue
-                    # Update changed document
-                    doc.title = title
-                    doc.content = post.content
-                    doc.content_hash = content_hash
-                    doc.frontmatter = fm_json
-                    doc.tags = tags
-                    doc.status = status
-                    doc.headings = headings
-                    doc.links = links
-                    doc.tasks = tasks
-                    doc.task_count = task_count
-                    doc.size_bytes = size_bytes
-                    doc.indexed_at = _utcnow()
-                    doc.updated_at = _utcnow()
-                else:
-                    doc = Document(
-                        folder_id=folder.id,
-                        file_path=file_path_str,
-                        file_name=file_name,
-                        title=title,
-                        content=post.content,
-                        content_hash=content_hash,
-                        frontmatter=fm_json,
-                        tags=tags,
-                        status=status,
-                        headings=headings,
-                        links=links,
-                        tasks=tasks,
-                        task_count=task_count,
-                        size_bytes=size_bytes,
-                        device_id=folder.device_id,
-                        indexed_at=_utcnow(),
-                    )
-                    db.add(doc)
-
-                summary["indexed"] += 1
-
-            except Exception:
-                summary["errors"] += 1
+        try:
+            result = await upsert_document_from_file(
+                folder,
+                db,
+                file_path_obj=file_path_obj,
+                base_path=base_path,
+            )
+            summary[result] += 1
+        except Exception:
+            summary["errors"] += 1
 
     # Soft-delete documents whose files are gone
     for file_path_str, doc in existing_docs.items():

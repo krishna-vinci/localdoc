@@ -65,6 +65,7 @@ async def create_folder(data: FolderCreate, db: AsyncSession = Depends(get_db)) 
     db.add(folder)
     await db.commit()
     await db.refresh(folder)
+    await folder_watcher.refresh_from_database()
     project_name = None
     if folder.project_id:
         project_result = await db.execute(select(Project).where(Project.id == folder.project_id))
@@ -104,6 +105,7 @@ async def update_folder(
         folder.default_template = data.default_template
     await db.commit()
     await db.refresh(folder)
+    await folder_watcher.refresh_from_database()
     project_name = None
     if folder.project_id:
         project_result = await db.execute(select(Project).where(Project.id == folder.project_id))
@@ -120,6 +122,7 @@ async def delete_folder(folder_id: str, db: AsyncSession = Depends(get_db)) -> N
         raise HTTPException(status_code=404, detail="Folder not found")
     await db.delete(folder)
     await db.commit()
+    await folder_watcher.refresh_from_database()
 
 
 @router.post("/{folder_id}/scan", status_code=status.HTTP_200_OK)
@@ -133,7 +136,9 @@ async def scan_folder_endpoint(
     try:
         summary = await scan_folder(folder, db)
     except ValueError as exc:
+        await folder_watcher.mark_scan_result(folder, error=str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await folder_watcher.mark_scan_result(folder, error=None)
     return summary
 
 
