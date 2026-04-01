@@ -1,0 +1,64 @@
+# LocalDocs Hub Development Environment
+# Hot-reload enabled for both backend and frontend
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:16-alpine
+    container_name: localdocs-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: localdocs
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Backend API - FastAPI with hot reload
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: localdocs-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/localdocs
+      DEBUG: "true"
+      HOST: 0.0.0.0
+      PORT: 8000
+      CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app:rw
+    depends_on:
+      db:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend - Next.js with hot reload
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: localdocs-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NODE_ENV: development
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app:rw
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
