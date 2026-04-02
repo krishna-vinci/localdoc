@@ -4,7 +4,7 @@ set -eu
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 AGENT_DIR="$ROOT_DIR/agent"
 OUTPUT_DIR=${LOCALDOCS_AGENT_OUTPUT_DIR:-$ROOT_DIR/backend/public/agent}
-VERSION=${LOCALDOCS_AGENT_VERSION:-0.1.0-alpha.1}
+VERSION=${LOCALDOCS_AGENT_VERSION:-$(tr -d '\n' < "$ROOT_DIR/VERSION")}
 
 if ! command -v go >/dev/null 2>&1; then
   printf 'error: go is required to build the LocalDocs CLI\n' >&2

@@ -2,6 +2,8 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app import __version__
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -13,7 +15,7 @@ class Settings(BaseSettings):
 
     # App
     APP_NAME: str = "LocalDocs Hub"
-    APP_VERSION: str = "0.1.0-alpha.1"
+    APP_VERSION: str = __version__
     DEBUG: bool = False
 
     # Server

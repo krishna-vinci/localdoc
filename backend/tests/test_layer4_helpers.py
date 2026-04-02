@@ -1,3 +1,4 @@
+from app import __version__
 from app.services.folder_runtime import (
     AVAILABILITY_PERMISSION_DENIED,
     AVAILABILITY_SUSPECT_UNMOUNTED,
@@ -23,7 +24,7 @@ def test_validate_backup_payload_accepts_minimal_valid_shape() -> None:
     payload = {
         "metadata": {
             "schema_version": BACKUP_SCHEMA_VERSION,
-            "app_version": "0.1.0-alpha.1",
+            "app_version": __version__,
             "generated_at": "2026-04-02T12:00:00+00:00",
         },
         "projects": [],
@@ -49,7 +50,7 @@ def test_validate_backup_payload_reports_missing_references() -> None:
     payload = {
         "metadata": {
             "schema_version": BACKUP_SCHEMA_VERSION,
-            "app_version": "0.1.0-alpha.1",
+            "app_version": __version__,
             "generated_at": "2026-04-02T12:00:00+00:00",
         },
         "projects": [],

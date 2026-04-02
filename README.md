@@ -1,7 +1,5 @@
 # LocalDocs Hub
 
-**Version:** `0.1.0-alpha.1`
-
 Local-first markdown operations for teams and individuals who want durable files, central visibility, and practical multi-device workflows.
 Built with **Next.js 15, FastAPI, PostgreSQL, SQLAlchemy 2, and a Go CLI**.
 
@@ -194,6 +192,8 @@ If you want to contribute:
 4. run relevant tests, lint, and type checks before submitting
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidelines.
+
+Versioning and release flow are documented in [`RELEASING.md`](RELEASING.md).
 
 ## License
 
