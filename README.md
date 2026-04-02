@@ -15,6 +15,13 @@ LocalDocs Hub brings scattered markdown files under one operational workspace. I
 
 ## Quick start
 
+### Get the code
+
+```bash
+git clone https://github.com/krishna-tb/localdocs-hub.git
+cd localdocs-hub
+```
+
 ### Configuration
 
 First, set up your environment variables by copying the example file:
@@ -28,7 +35,7 @@ Review and edit `.env` if you need to modify default credentials or allowed orig
 ### Start the stack
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 | Service | URL |
