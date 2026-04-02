@@ -15,6 +15,16 @@ LocalDocs Hub brings scattered markdown files under one operational workspace. I
 
 ## Quick start
 
+### Configuration
+
+First, set up your environment variables by copying the example file:
+
+```bash
+cp .env.example .env
+```
+
+Review and edit `.env` if you need to modify default credentials or allowed origins.
+
 ### Start the stack
 
 ```bash
