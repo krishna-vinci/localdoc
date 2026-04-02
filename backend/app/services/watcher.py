@@ -279,7 +279,11 @@ class FolderWatcher:
                 return
 
             try:
-                scan_summary = await scan_folder(folder, session)
+                scan_summary = await scan_folder(
+                    folder,
+                    session,
+                    allow_empty_file_overwrite=False,
+                )
                 await self._update_status(
                     folder,
                     last_event=mark_event,

@@ -448,7 +448,12 @@ async def _handle_startup_reconcile(job_id: str, payload: dict[str, Any]) -> dic
                     )
                     summary["verified"] += 1
                 else:
-                    folder_summary = await scan_folder(folder, db, allow_mass_delete=False)
+                    folder_summary = await scan_folder(
+                        folder,
+                        db,
+                        allow_mass_delete=False,
+                        allow_empty_file_overwrite=False,
+                    )
                     await update_folder_runtime_state(
                         db,
                         folder,

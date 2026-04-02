@@ -190,6 +190,22 @@ def apply_parsed_document(
     doc.updated_at = now
 
 
+def _should_preserve_existing_document_on_empty_rescan(
+    doc: Document,
+    parsed: ParsedMarkdownDocument,
+    *,
+    size_bytes: int,
+    allow_empty_file_overwrite: bool,
+) -> bool:
+    if allow_empty_file_overwrite:
+        return False
+    if size_bytes != 0 or parsed.raw_content != "":
+        return False
+    if doc.is_deleted:
+        return False
+    return doc.size_bytes > 0 or bool(doc.content) or bool(doc.frontmatter)
+
+
 def _collect_markdown_files(base_path: Path) -> list[Path]:
     file_paths: list[Path] = []
     for root, dirs, files in os.walk(base_path):
@@ -214,6 +230,7 @@ async def upsert_document_from_file(
     *,
     file_path_obj: Path,
     base_path: Path | None = None,
+    allow_empty_file_overwrite: bool = True,
 ) -> str:
     base_scan_path = base_path or resolve_folder_scan_base_path(folder)
     relative_file_path = file_path_obj.relative_to(base_scan_path)
@@ -239,6 +256,14 @@ async def upsert_document_from_file(
         return "indexed"
 
     if doc.content_hash == parsed.content_hash and not doc.is_deleted:
+        return "skipped"
+
+    if _should_preserve_existing_document_on_empty_rescan(
+        doc,
+        parsed,
+        size_bytes=stat.st_size,
+        allow_empty_file_overwrite=allow_empty_file_overwrite,
+    ):
         return "skipped"
 
     doc.file_name = file_path_obj.name
@@ -294,6 +319,7 @@ async def scan_folder(
     db: AsyncSession,
     *,
     allow_mass_delete: bool = False,
+    allow_empty_file_overwrite: bool = True,
 ) -> dict[str, int]:
     """
     Walk *folder.path* recursively, index every *.md / *.markdown file.
@@ -340,6 +366,7 @@ async def scan_folder(
                 db,
                 file_path_obj=file_path_obj,
                 base_path=base_path,
+                allow_empty_file_overwrite=allow_empty_file_overwrite,
             )
             summary[result] += 1
         except Exception:
