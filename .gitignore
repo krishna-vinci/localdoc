@@ -41,6 +41,7 @@ htmlcov/
 
 # Misc
 *.log
+agent/localdocs-agent
 
 # Reference code
 memos/

@@ -11,19 +11,40 @@ from watchfiles import DefaultFilter, awatch
 from app.core.config import settings
 from app.core.database import async_session_maker
 from app.models.folder import Folder
-from app.services.scanner import _resolve_scan_base_path, scan_folder, sync_document_from_filesystem
+from app.services.folder_runtime import (
+    AVAILABILITY_AVAILABLE,
+    UNSET,
+    classify_error_state,
+    ensure_folder_runtime_state,
+    list_folder_runtime_rows,
+    parse_scan_summary,
+    sync_folder_runtime_configuration,
+    update_folder_runtime_state,
+)
+from app.services.scanner import (
+    resolve_folder_scan_base_path,
+    scan_folder,
+    sync_document_from_filesystem,
+)
 
 
 @dataclass
 class FolderWatchStatus:
     folder_id: str
     folder_name: str
+    folder_path: str
     active: bool
     watch_enabled: bool
+    watch_state: str = "idle"
+    availability_state: str = "unknown"
     last_checked_at: str | None = None
     last_event_at: str | None = None
     last_scan_at: str | None = None
+    last_full_reconcile_at: str | None = None
+    consecutive_error_count: int = 0
     last_error: str | None = None
+    last_scan_summary: dict[str, int] | None = None
+    degraded_since: str | None = None
 
 
 def _utcnow_iso() -> str:
@@ -47,6 +68,10 @@ class FolderWatcher:
         self._lock = asyncio.Lock()
         self._watch_filter = MarkdownWatchFilter()
 
+    @property
+    def is_started(self) -> bool:
+        return self._started
+
     async def start(self) -> None:
         if self._started:
             return
@@ -62,6 +87,10 @@ class FolderWatcher:
         async with async_session_maker() as session:
             result = await session.execute(select(Folder).order_by(Folder.name.asc()))
             folders = result.scalars().all()
+            for folder in folders:
+                await ensure_folder_runtime_state(session, folder)
+                await sync_folder_runtime_configuration(session, folder)
+            await session.commit()
 
         current_folder_ids = {folder.id for folder in folders}
         for folder_id in list(self._statuses.keys()):
@@ -71,10 +100,45 @@ class FolderWatcher:
         for folder in folders:
             await self._sync_folder(folder)
 
-    async def get_statuses(self) -> list[dict[str, str | bool | None]]:
-        async with self._lock:
-            statuses = sorted(self._statuses.values(), key=lambda status: status.folder_name.lower())
-            return [asdict(status) for status in statuses]
+    async def get_statuses(self) -> list[dict[str, object | None]]:
+        async with async_session_maker() as session:
+            rows = await list_folder_runtime_rows(session)
+            payload: list[dict[str, object | None]] = []
+
+            for folder, state in rows:
+                if state is None:
+                    continue
+                payload.append(
+                    asdict(
+                        FolderWatchStatus(
+                            folder_id=folder.id,
+                            folder_name=folder.name,
+                            folder_path=folder.path,
+                            active=folder.is_active,
+                            watch_enabled=folder.watch_enabled,
+                            watch_state=state.watch_state,
+                            availability_state=state.availability_state,
+                            last_checked_at=state.last_checked_at.isoformat() if state.last_checked_at else None,
+                            last_event_at=state.last_event_at.isoformat() if state.last_event_at else None,
+                            last_scan_at=(
+                                state.last_successful_scan_at.isoformat()
+                                if state.last_successful_scan_at
+                                else None
+                            ),
+                            last_full_reconcile_at=(
+                                state.last_full_reconcile_at.isoformat()
+                                if state.last_full_reconcile_at
+                                else None
+                            ),
+                            consecutive_error_count=state.consecutive_error_count,
+                            last_error=state.last_error,
+                            last_scan_summary=parse_scan_summary(state.last_scan_summary),
+                            degraded_since=state.degraded_since.isoformat() if state.degraded_since else None,
+                        )
+                    )
+                )
+
+            return payload
 
     async def force_rescan_all(self) -> dict[str, int]:
         async with async_session_maker() as session:
@@ -87,14 +151,38 @@ class FolderWatcher:
                     summary["indexed"] += scan_summary["indexed"]
                     summary["skipped"] += scan_summary["skipped"]
                     summary["errors"] += scan_summary["errors"]
-                    await self.mark_scan_result(folder, error=None)
+                    await self.mark_scan_result(
+                        folder,
+                        error=None,
+                        scan_summary=scan_summary,
+                        full_reconcile=True,
+                    )
                 except Exception as exc:
                     summary["errors"] += 1
-                    await self.mark_scan_result(folder, error=str(exc))
+                    await self.mark_scan_result(folder, error=str(exc), full_reconcile=True)
             return summary
 
-    async def mark_scan_result(self, folder: Folder, *, error: str | None) -> None:
-        await self._update_status(folder, last_scan=error is None, error=error)
+    async def mark_scan_result(
+        self,
+        folder: Folder,
+        *,
+        error: str | None,
+        scan_summary: dict[str, int] | None = None,
+        full_reconcile: bool = False,
+    ) -> None:
+        watch_state = None
+        availability_state = None
+        if error:
+            watch_state, availability_state = classify_error_state(error)
+        await self._update_status(
+            folder,
+            last_scan=error is None,
+            full_reconcile=full_reconcile,
+            error=error,
+            scan_summary=scan_summary,
+            watch_state=watch_state,
+            availability_state=availability_state,
+        )
 
     async def _remove_folder(self, folder_id: str) -> None:
         await self._stop_folder_task(folder_id)
@@ -103,22 +191,32 @@ class FolderWatcher:
             self._watched_paths.pop(folder_id, None)
 
     async def _sync_folder(self, folder: Folder) -> None:
-        await self._update_status(folder)
+        await self._update_status(
+            folder,
+            watch_state="disabled" if not folder.is_active or not folder.watch_enabled else None,
+        )
 
         if not self._started:
             return
 
         if not folder.is_active or not folder.watch_enabled:
             await self._stop_folder_task(folder.id)
+            await self._update_status(folder, watch_state="disabled", error=None)
             return
 
         try:
-            resolved_path = _resolve_scan_base_path(folder.path)
+            resolved_path = resolve_folder_scan_base_path(folder)
             if not resolved_path.exists() or not resolved_path.is_dir():
                 raise ValueError(f"Path does not exist or is not a directory: {folder.path}")
         except Exception as exc:
             await self._stop_folder_task(folder.id)
-            await self._update_status(folder, error=str(exc))
+            watch_state, availability_state = classify_error_state(str(exc))
+            await self._update_status(
+                folder,
+                error=str(exc),
+                watch_state=watch_state,
+                availability_state=availability_state,
+            )
             return
 
         current_path = self._watched_paths.get(folder.id)
@@ -177,13 +275,30 @@ class FolderWatcher:
             if folder is None:
                 return
             if not folder.is_active or not folder.watch_enabled:
+                await self._update_status(folder, watch_state="disabled", error=None)
                 return
 
             try:
-                await scan_folder(folder, session)
-                await self._update_status(folder, last_event=mark_event, last_scan=True, error=None)
+                scan_summary = await scan_folder(folder, session)
+                await self._update_status(
+                    folder,
+                    last_event=mark_event,
+                    last_scan=True,
+                    full_reconcile=True,
+                    error=None,
+                    scan_summary=scan_summary,
+                    watch_state="watching",
+                    availability_state=AVAILABILITY_AVAILABLE,
+                )
             except Exception as exc:
-                await self._update_status(folder, last_event=mark_event, error=str(exc))
+                watch_state, availability_state = classify_error_state(str(exc))
+                await self._update_status(
+                    folder,
+                    last_event=mark_event,
+                    error=str(exc),
+                    watch_state=watch_state,
+                    availability_state=availability_state,
+                )
 
     async def _sync_changed_paths(self, folder_id: str, changed_paths: set[Path]) -> None:
         async with async_session_maker() as session:
@@ -193,7 +308,7 @@ class FolderWatcher:
             if not folder.is_active or not folder.watch_enabled:
                 return
 
-            base_path = _resolve_scan_base_path(folder.path)
+            base_path = resolve_folder_scan_base_path(folder)
             indexed = 0
             skipped = 0
             errors = 0
@@ -217,13 +332,22 @@ class FolderWatcher:
                 last_event=True,
                 last_scan=indexed > 0 or skipped > 0,
                 error=None if errors == 0 else f"Failed to sync {errors} changed file(s)",
+                scan_summary={"indexed": indexed, "skipped": skipped, "errors": errors},
+                watch_state="watching" if errors == 0 else "degraded",
+                availability_state=AVAILABILITY_AVAILABLE,
             )
 
     async def _mark_folder_error(self, folder_id: str, error: str) -> None:
         async with async_session_maker() as session:
             folder = await session.get(Folder, folder_id)
             if folder is not None:
-                await self._update_status(folder, error=error)
+                watch_state, availability_state = classify_error_state(error)
+                await self._update_status(
+                    folder,
+                    error=error,
+                    watch_state=watch_state,
+                    availability_state=availability_state,
+                )
 
     async def _update_status(
         self,
@@ -231,7 +355,11 @@ class FolderWatcher:
         *,
         last_event: bool = False,
         last_scan: bool = False,
-        error: str | None = None,
+        full_reconcile: bool = False,
+        error: str | None | object = UNSET,
+        scan_summary: dict[str, int] | None = None,
+        watch_state: str | None = None,
+        availability_state: str | None = None,
     ) -> None:
         async with self._lock:
             current = self._statuses.get(
@@ -239,21 +367,55 @@ class FolderWatcher:
                 FolderWatchStatus(
                     folder_id=folder.id,
                     folder_name=folder.name,
+                    folder_path=folder.path,
                     active=folder.is_active,
                     watch_enabled=folder.watch_enabled,
                 ),
             )
             now_iso = _utcnow_iso()
             current.folder_name = folder.name
+            current.folder_path = folder.path
             current.active = folder.is_active
             current.watch_enabled = folder.watch_enabled
+            if watch_state is not None:
+                current.watch_state = watch_state
+            if availability_state is not None:
+                current.availability_state = availability_state
             current.last_checked_at = now_iso
             if last_event:
                 current.last_event_at = now_iso
             if last_scan:
                 current.last_scan_at = now_iso
-            current.last_error = error
+            if full_reconcile:
+                current.last_full_reconcile_at = now_iso
+            if scan_summary is not None:
+                current.last_scan_summary = scan_summary
+            if error is not UNSET:
+                current.last_error = error
+            if isinstance(error, str) and error:
+                current.consecutive_error_count += 1
+                current.degraded_since = current.degraded_since or now_iso
+            elif error is None:
+                current.consecutive_error_count = 0
+                current.degraded_since = None
             self._statuses[folder.id] = current
+
+        async with async_session_maker() as session:
+            persisted_folder = await session.get(Folder, folder.id)
+            if persisted_folder is None:
+                return
+            await update_folder_runtime_state(
+                session,
+                persisted_folder,
+                watch_state=watch_state,
+                availability_state=availability_state,
+                last_event=last_event,
+                last_scan=last_scan,
+                full_reconcile=full_reconcile,
+                error=error,
+                scan_summary=scan_summary,
+            )
+            await session.commit()
 
 
 folder_watcher = FolderWatcher()

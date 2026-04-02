@@ -17,12 +17,13 @@ from app.models.document import Document
 from app.models.document_audit import DocumentWriteEvent
 from app.models.document_version import DocumentVersion
 from app.models.folder import Folder
+from app.services.background_jobs import enqueue_document_recovery_sync
+from app.services.folder_runtime import classify_error_state, update_folder_runtime_state
 from app.services.scanner import (
     _compute_hash,
     apply_parsed_document,
     parse_markdown_document,
     resolve_document_file_path,
-    sync_document_from_filesystem,
 )
 
 
@@ -199,11 +200,18 @@ async def save_document_content(
                 try:
                     recovery_folder = await recovery_session.get(Folder, folder.id)
                     if recovery_folder is not None:
-                        await sync_document_from_filesystem(
-                            recovery_folder,
-                            recovery_session,
-                            absolute_path=target_path,
+                        await enqueue_document_recovery_sync(recovery_folder.id, target_path)
+                        watch_state, availability_state = classify_error_state(
+                            "Document save wrote to disk but queued recovery sync"
                         )
+                        await update_folder_runtime_state(
+                            recovery_session,
+                            recovery_folder,
+                            watch_state=watch_state,
+                            availability_state=availability_state,
+                            error="Document save wrote to disk but queued recovery sync",
+                        )
+                        await recovery_session.commit()
                 except Exception:
                     pass
         raise HTTPException(status_code=500, detail="Failed to save document safely") from exc

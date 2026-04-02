@@ -1,7 +1,7 @@
 "use client"
 
 import { FolderOpen, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -20,8 +20,11 @@ import {
   createFolder,
   deleteFolder,
   getFolders,
+  getJob,
   getProjects,
   getWatchStatuses,
+  rebuildAllFolders,
+  rebuildFolder,
   reindexFolders,
   scanFolder,
   updateFolder,
@@ -30,6 +33,7 @@ import { formatTimestamp } from "@/lib/format"
 import type { Folder, Project, ScanSummary, WatchStatus } from "@/types"
 
 export default function FoldersPage() {
+  const isMountedRef = useRef(true)
   const [folders, setFolders] = useState<Folder[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [watchStatuses, setWatchStatuses] = useState<Record<string, WatchStatus>>({})
@@ -44,9 +48,11 @@ export default function FoldersPage() {
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
   const [reindexing, setReindexing] = useState(false)
+  const [rebuildingAll, setRebuildingAll] = useState(false)
 
   // Scan state per folder
   const [scanning, setScanning] = useState<Record<string, boolean>>({})
+  const [rebuilding, setRebuilding] = useState<Record<string, boolean>>({})
   const [scanResult, setScanResult] = useState<Record<string, ScanSummary>>({})
 
   // Delete state
@@ -76,6 +82,26 @@ export default function FoldersPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
+
+  async function waitForJobCompletion(jobId: string, maxAttempts: number) {
+    let attempts = 0
+    while (attempts < maxAttempts && isMountedRef.current) {
+      const refreshedJob = await getJob(jobId)
+      if (["succeeded", "failed", "cancelled"].includes(refreshedJob.status)) {
+        return refreshedJob
+      }
+      attempts += 1
+      await new Promise((resolve) => window.setTimeout(resolve, 1000))
+    }
+
+    return null
+  }
 
   async function handleAdd() {
     if (!newPath.trim() || !newName.trim()) return
@@ -123,8 +149,8 @@ export default function FoldersPage() {
       setScanResult((prev) => ({ ...prev, [id]: result }))
       const loadedWatchStatuses = await getWatchStatuses()
       setWatchStatuses(Object.fromEntries(loadedWatchStatuses.map((status) => [status.folder_id, status])))
-    } catch {
-      // ignore
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to scan folder")
     } finally {
       setScanning((prev) => ({ ...prev, [id]: false }))
     }
@@ -169,6 +195,46 @@ export default function FoldersPage() {
     }
   }
 
+  async function handleRebuildAll() {
+    setRebuildingAll(true)
+    setError(null)
+    try {
+      const job = await rebuildAllFolders()
+      await waitForJobCompletion(job.id, 30)
+      if (isMountedRef.current) {
+        await load()
+      }
+    } catch (e) {
+      if (isMountedRef.current) {
+        setError(e instanceof Error ? e.message : "Failed to rebuild folders")
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setRebuildingAll(false)
+      }
+    }
+  }
+
+  async function handleRebuildFolder(folderId: string) {
+    setRebuilding((prev) => ({ ...prev, [folderId]: true }))
+    setError(null)
+    try {
+      const job = await rebuildFolder(folderId)
+      await waitForJobCompletion(job.id, 20)
+      if (isMountedRef.current) {
+        await load()
+      }
+    } catch (e) {
+      if (isMountedRef.current) {
+        setError(e instanceof Error ? e.message : "Failed to rebuild folder")
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setRebuilding((prev) => ({ ...prev, [folderId]: false }))
+      }
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -182,6 +248,10 @@ export default function FoldersPage() {
           <Button variant="outline" onClick={() => void handleReindexAll()} disabled={reindexing}>
             {reindexing && <Loader2 className="size-4 mr-1.5 animate-spin" />}
             Reindex All
+          </Button>
+          <Button variant="outline" onClick={() => void handleRebuildAll()} disabled={rebuildingAll}>
+            {rebuildingAll && <Loader2 className="size-4 mr-1.5 animate-spin" />}
+            Queue Rebuild All
           </Button>
           <Dialog open={addOpen} onOpenChange={setAddOpen}>
             <DialogTrigger
@@ -274,16 +344,33 @@ export default function FoldersPage() {
                  <div className="flex min-w-0 items-center gap-3">
                   <FolderOpen className="size-5 shrink-0 text-muted-foreground" />
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="font-medium text-sm">{folder.name}</p>
-                      <Badge variant={folder.is_active ? "default" : "secondary"}>
-                        {folder.is_active ? "active" : "inactive"}
-                      </Badge>
-                      <Badge variant={folder.watch_enabled ? "secondary" : "outline"}>
-                        {folder.watch_enabled ? "watching" : "manual"}
-                      </Badge>
-                      {folder.project_name && <Badge variant="outline">{folder.project_name}</Badge>}
-                    </div>
+                     <div className="flex items-center gap-2">
+                       <p className="font-medium text-sm">{folder.name}</p>
+                       <Badge variant={folder.is_active ? "default" : "secondary"}>
+                         {folder.is_active ? "active" : "inactive"}
+                       </Badge>
+                        <Badge variant={folder.watch_enabled ? "secondary" : "outline"}>
+                          {folder.watch_enabled ? "watching" : "manual"}
+                        </Badge>
+                        <Badge variant="outline">{folder.source_type === "remote_mirror" ? "remote mirror" : "local"}</Badge>
+                        {folder.is_read_only && <Badge variant="secondary">read-only</Badge>}
+                        {watchStatuses[folder.id]?.watch_state && (
+                         <Badge
+                           variant={
+                             watchStatuses[folder.id]?.watch_state === "degraded" ||
+                             watchStatuses[folder.id]?.watch_state === "failed"
+                               ? "destructive"
+                               : "outline"
+                           }
+                         >
+                           {watchStatuses[folder.id]?.watch_state}
+                         </Badge>
+                       )}
+                       {watchStatuses[folder.id]?.availability_state && (
+                         <Badge variant="outline">{watchStatuses[folder.id]?.availability_state}</Badge>
+                       )}
+                       {folder.project_name && <Badge variant="outline">{folder.project_name}</Badge>}
+                     </div>
                     <p className="text-xs text-muted-foreground truncate mt-0.5">{folder.path}</p>
                     {scanResult[folder.id] && (
                       <p className="text-xs text-muted-foreground mt-1">
@@ -320,19 +407,29 @@ export default function FoldersPage() {
                    <Button
                      variant="ghost"
                      size="sm"
-                     className="justify-center"
-                     onClick={() => void handleWatchToggle(folder)}
-                     disabled={savingWatch[folder.id]}
-                   >
+                      className="justify-center"
+                      onClick={() => void handleWatchToggle(folder)}
+                      disabled={savingWatch[folder.id] || folder.is_read_only}
+                    >
                     {savingWatch[folder.id] ? <Loader2 className="size-3.5 animate-spin" /> : folder.watch_enabled ? "Disable Watch" : "Enable Watch"}
                   </Button>
-                   <Button
-                     variant="outline"
-                     size="sm"
-                     className="justify-center"
-                     onClick={() => void handleScan(folder.id)}
-                     disabled={scanning[folder.id]}
-                   >
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="justify-center"
+                      onClick={() => void handleRebuildFolder(folder.id)}
+                      disabled={rebuilding[folder.id]}
+                    >
+                      {rebuilding[folder.id] ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
+                      Rebuild
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                       className="justify-center"
+                       onClick={() => void handleScan(folder.id)}
+                      disabled={scanning[folder.id] || folder.is_read_only}
+                    >
                     {scanning[folder.id] ? (
                       <Loader2 className="size-3.5 animate-spin mr-1.5" />
                     ) : (
@@ -343,11 +440,11 @@ export default function FoldersPage() {
                    <Button
                      variant="ghost"
                      size="icon"
-                     className="self-end lg:self-auto"
-                     onClick={() => void handleDelete(folder.id)}
-                     disabled={deleting[folder.id]}
-                     aria-label={`Delete ${folder.name}`}
-                  >
+                      className="self-end lg:self-auto"
+                      onClick={() => void handleDelete(folder.id)}
+                      disabled={deleting[folder.id] || folder.is_read_only}
+                      aria-label={`Delete ${folder.name}`}
+                   >
                     {deleting[folder.id] ? (
                       <Loader2 className="size-3.5 animate-spin" />
                     ) : (

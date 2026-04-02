@@ -30,6 +30,11 @@ class FolderResponse(FolderBase):
     id: str
     project_id: str | None
     project_name: str | None = None
+    source_type: str
+    source_path: str | None
+    storage_path: str | None
+    source_share_id: str | None
+    is_read_only: bool
     is_active: bool
     watch_enabled: bool
     device_id: str

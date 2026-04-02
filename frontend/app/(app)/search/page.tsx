@@ -156,6 +156,16 @@ export default function SearchPage() {
                         <p className="text-xs text-muted-foreground truncate">
                           {r.project_name ?? "No project"} · {r.folder_name ?? r.file_name}
                         </p>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          <Badge variant="outline" className="text-[11px]">
+                            {r.source_type === "remote_mirror" ? `remote · ${r.device_id}` : "local"}
+                          </Badge>
+                          {r.is_read_only && (
+                            <Badge variant="secondary" className="text-[11px]">
+                              read-only
+                            </Badge>
+                          )}
+                        </div>
                         {r.snippet && (
                           <p className="text-xs text-muted-foreground mt-1 line-clamp-3" dangerouslySetInnerHTML={{ __html: r.snippet }} />
                         )}

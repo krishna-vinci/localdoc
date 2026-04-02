@@ -30,16 +30,19 @@ router = APIRouter()
 def _serialize_document_list(
     doc: Document,
     *,
-    folder_name: str | None,
+    folder: Folder,
     project_id: str | None,
     project_name: str | None,
 ) -> DocumentListResponse:
     return DocumentListResponse(
         id=doc.id,
         folder_id=doc.folder_id,
-        folder_name=folder_name,
+        folder_name=folder.name,
         project_id=project_id,
         project_name=project_name,
+        source_type=folder.source_type,
+        source_path=folder.source_path,
+        is_read_only=folder.is_read_only,
         file_path=doc.file_path,
         file_name=doc.file_name,
         title=doc.title,
@@ -69,6 +72,9 @@ async def _serialize_document_detail(
         folder_name=folder_name,
         project_id=project_id,
         project_name=project_name,
+        source_type=folder.source_type,
+        source_path=folder.source_path,
+        is_read_only=folder.is_read_only,
         file_path=doc.file_path,
         file_name=doc.file_name,
         title=doc.title,
@@ -107,7 +113,7 @@ async def list_documents(
     limit: int = 50,
 ) -> list[DocumentListResponse]:
     query = (
-        select(Document, Folder.name, Folder.project_id, Project.name)
+        select(Document, Folder, Folder.project_id, Project.name)
         .join(Folder, Document.folder_id == Folder.id)
         .outerjoin(Project, Folder.project_id == Project.id)
         .where(Document.is_deleted.is_(False))
@@ -127,11 +133,11 @@ async def list_documents(
     return [
         _serialize_document_list(
             doc,
-            folder_name=folder_name,
+            folder=folder,
             project_id=project_id_value,
             project_name=project_name,
         )
-        for doc, folder_name, project_id_value, project_name in result.all()
+        for doc, folder, project_id_value, project_name in result.all()
     ]
 
 
@@ -156,7 +162,7 @@ async def list_duplicate_candidates(
         .subquery()
     )
     query = (
-        select(Document, Folder.name, Folder.project_id, Project.name)
+        select(Document, Folder, Folder.project_id, Project.name)
         .join(Folder, Document.folder_id == Folder.id)
         .outerjoin(Project, Folder.project_id == Project.id)
         .where(
@@ -170,11 +176,11 @@ async def list_duplicate_candidates(
     return [
         _serialize_document_list(
             doc,
-            folder_name=folder_name,
+            folder=folder,
             project_id=project_id_value,
             project_name=project_name,
         )
-        for doc, folder_name, project_id_value, project_name in result.all()
+        for doc, folder, project_id_value, project_name in result.all()
     ]
 
 
@@ -206,6 +212,8 @@ async def save_document(
     db: AsyncSession = Depends(get_db),
 ) -> DocumentResponse:
     document, folder = await get_document_with_folder(db, doc_id)
+    if folder.is_read_only:
+        raise HTTPException(status_code=403, detail="Mirrored remote documents are read-only")
     document = await save_document_content(
         db,
         document=document,
@@ -264,6 +272,8 @@ async def restore_document(
     db: AsyncSession = Depends(get_db),
 ) -> DocumentResponse:
     document, folder = await get_document_with_folder(db, doc_id)
+    if folder.is_read_only:
+        raise HTTPException(status_code=403, detail="Mirrored remote documents are read-only")
     version = await db.get(DocumentVersion, version_id)
     if version is None or version.document_id != doc_id:
         raise HTTPException(status_code=404, detail="Document version not found")

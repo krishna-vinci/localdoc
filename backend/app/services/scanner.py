@@ -125,9 +125,26 @@ def _resolve_scan_base_path(folder_path: str) -> Path:
     return filesystem_root / relative_path
 
 
+def resolve_folder_scan_base_path(folder: Folder) -> Path:
+    if folder.storage_path:
+        return Path(folder.storage_path)
+    source_path = folder.source_path or folder.path
+    return _resolve_scan_base_path(source_path)
+
+
 def resolve_document_file_path(folder: Folder, file_path: str) -> Path:
-    base_path = _resolve_scan_base_path(folder.path)
-    relative_path = Path(file_path).relative_to(Path(folder.path))
+    base_path = resolve_folder_scan_base_path(folder)
+    relative_root = (folder.source_path or folder.path).replace("\\", "/").rstrip("/")
+    normalized_file_path = file_path.replace("\\", "/")
+    if normalized_file_path.casefold() == relative_root.casefold():
+        relative_path = Path()
+    elif normalized_file_path.casefold().startswith(relative_root.casefold() + "/"):
+        relative_fragment = normalized_file_path[len(relative_root) + 1 :]
+        relative_path = Path(relative_fragment)
+    else:
+        raise ValueError(
+            f"Document path {file_path} does not belong to folder source root {folder.source_path or folder.path}"
+        )
     return base_path / relative_path
 
 
@@ -198,9 +215,9 @@ async def upsert_document_from_file(
     file_path_obj: Path,
     base_path: Path | None = None,
 ) -> str:
-    base_scan_path = base_path or _resolve_scan_base_path(folder.path)
+    base_scan_path = base_path or resolve_folder_scan_base_path(folder)
     relative_file_path = file_path_obj.relative_to(base_scan_path)
-    file_path_str = str(Path(folder.path) / relative_file_path)
+    file_path_str = str(Path(folder.source_path or folder.path) / relative_file_path)
 
     result = await db.execute(select(Document).where(Document.folder_id == folder.id, Document.file_path == file_path_str))
     doc = result.scalar_one_or_none()
@@ -245,10 +262,11 @@ async def sync_document_from_filesystem(
     db: AsyncSession,
     *,
     absolute_path: Path,
+    commit: bool = True,
 ) -> dict[str, int]:
-    base_path = _resolve_scan_base_path(folder.path)
+    base_path = resolve_folder_scan_base_path(folder)
     relative_file_path = absolute_path.relative_to(base_path)
-    file_path_str = str(Path(folder.path) / relative_file_path)
+    file_path_str = str(Path(folder.source_path or folder.path) / relative_file_path)
     summary = {"indexed": 0, "skipped": 0, "errors": 0}
 
     try:
@@ -260,24 +278,35 @@ async def sync_document_from_filesystem(
             summary["indexed"] += 1
         else:
             summary["skipped"] += 1
-        await db.commit()
+        if commit:
+            await db.commit()
     except Exception:
         await db.rollback()
+        if not commit:
+            raise
         summary["errors"] += 1
 
     return summary
 
 
-async def scan_folder(folder: Folder, db: AsyncSession) -> dict[str, int]:
+async def scan_folder(
+    folder: Folder,
+    db: AsyncSession,
+    *,
+    allow_mass_delete: bool = False,
+) -> dict[str, int]:
     """
     Walk *folder.path* recursively, index every *.md / *.markdown file.
     Returns a summary dict: {"indexed": n, "skipped": n, "errors": n}.
+    When allow_mass_delete is False, refuse a full empty-root deletion if the
+    folder previously had indexed documents. This protects against missing mounts
+    or unexpectedly empty roots during automatic scans.
     """
-    base_path = _resolve_scan_base_path(folder.path)
+    base_path = resolve_folder_scan_base_path(folder)
     path_exists = await asyncio.to_thread(base_path.exists)
     path_is_dir = await asyncio.to_thread(base_path.is_dir)
     if not path_exists or not path_is_dir:
-        raise ValueError(f"Path does not exist or is not a directory: {folder.path}")
+        raise ValueError(f"Path does not exist or is not a directory: {folder.source_path or folder.path}")
 
     summary: dict[str, int] = {"indexed": 0, "skipped": 0, "errors": 0}
 
@@ -293,9 +322,16 @@ async def scan_folder(folder: Folder, db: AsyncSession) -> dict[str, int]:
     seen_paths: set[str] = set()
     file_paths = await asyncio.to_thread(_collect_markdown_files, base_path)
 
+    if existing_docs and not file_paths and not allow_mass_delete:
+        raise ValueError(
+            "Folder appears empty and would remove all indexed markdown files. "
+            "Possible unmounted or misconfigured root; refusing automatic mass delete. "
+            "Run an explicit rebuild to confirm the folder is truly empty."
+        )
+
     for file_path_obj in file_paths:
         relative_file_path = file_path_obj.relative_to(base_path)
-        file_path_str = str(Path(folder.path) / relative_file_path)
+        file_path_str = str(Path(folder.source_path or folder.path) / relative_file_path)
         seen_paths.add(file_path_str)
 
         try:

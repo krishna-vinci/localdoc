@@ -19,6 +19,10 @@ class SearchResult(BaseModel):
     folder_name: str | None = None
     project_id: str | None = None
     project_name: str | None = None
+    source_type: str = "local"
+    source_path: str | None = None
+    is_read_only: bool = False
+    device_id: str
     file_name: str
     title: str
     file_path: str
@@ -57,7 +61,7 @@ async def search_documents(
     search_query = func.websearch_to_tsquery(english_config, q)
     rank = func.ts_rank_cd(search_vector, search_query)
     query = (
-        select(Document, Folder.name, Folder.project_id, Project.name, rank)
+        select(Document, Folder, Folder.project_id, Project.name, rank)
         .join(Folder, Document.folder_id == Folder.id)
         .outerjoin(Project, Folder.project_id == Project.id)
         .where(
@@ -84,7 +88,7 @@ async def search_documents(
     rows = result.all()
 
     results = []
-    for doc, folder_name, doc_project_id, project_name, _ in rows:
+    for doc, folder, doc_project_id, project_name, _ in rows:
         snippet = None
         headline_result = await db.execute(
             select(
@@ -101,9 +105,13 @@ async def search_documents(
             SearchResult(
                 id=doc.id,
                 folder_id=doc.folder_id,
-                folder_name=folder_name,
+                folder_name=folder.name,
                 project_id=doc_project_id,
                 project_name=project_name,
+                source_type=folder.source_type,
+                source_path=folder.source_path,
+                is_read_only=folder.is_read_only,
+                device_id=doc.device_id,
                 file_name=doc.file_name,
                 title=doc.title,
                 file_path=doc.file_path,

@@ -201,6 +201,21 @@ export default function DocumentsPage() {
                           <p className="text-xs text-muted-foreground truncate">
                             {item.project_name ?? "No project"} · {item.folder_name ?? item.file_name}
                           </p>
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            <Badge variant="outline" className="text-[11px]">
+                              {item.source_type === "remote_mirror" ? "remote mirror" : "local"}
+                            </Badge>
+                            {item.is_read_only && (
+                              <Badge variant="secondary" className="text-[11px]">
+                                read-only
+                              </Badge>
+                            )}
+                            {item.source_path && (
+                              <Badge variant="outline" className="max-w-full truncate text-[11px]">
+                                {item.source_path}
+                              </Badge>
+                            )}
+                          </div>
                           {snippet && (
                             <p className="text-xs text-muted-foreground mt-1 line-clamp-3" dangerouslySetInnerHTML={{ __html: snippet }} />
                           )}

@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     WATCHDEBOUNCE_SECONDS: float = 0.5
     FILESYSTEM_ROOT: str = ""
 
+    # Layer 4 operations
+    BACKUP_DIR: str = ""
+
+    # Layer 5 replica storage
+    REPLICA_ROOT: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

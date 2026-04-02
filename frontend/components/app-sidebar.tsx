@@ -1,6 +1,6 @@
 "use client"
 
-import { FileText, FolderOpen, Home, Layers3, Search } from "lucide-react"
+import { Activity, FileText, FolderOpen, Home, Layers3, Search, Smartphone } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 
@@ -12,6 +12,8 @@ const navItems = [
   { href: "/folders", icon: FolderOpen, label: "Folders" },
   { href: "/documents", icon: FileText, label: "Documents" },
   { href: "/search", icon: Search, label: "Search" },
+  { href: "/devices", icon: Smartphone, label: "Devices" },
+  { href: "/operations", icon: Activity, label: "Operations" },
 ]
 
 interface AppSidebarProps {

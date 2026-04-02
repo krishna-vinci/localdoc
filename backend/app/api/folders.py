@@ -7,7 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.folder import Folder
 from app.models.project import Project
+from app.schemas.job import BackgroundJobResponse
 from app.schemas.folder import FolderCreate, FolderResponse, FolderUpdate
+from app.services.background_jobs import (
+    JOB_TYPE_REBUILD_ALL,
+    JOB_TYPE_REBUILD_FOLDER,
+    create_background_job,
+    serialize_background_job,
+)
 from app.services.scanner import scan_folder
 from app.services.watcher import folder_watcher
 
@@ -21,6 +28,11 @@ def _serialize_folder(folder: Folder, project_name: str | None = None) -> Folder
         name=folder.name,
         project_id=folder.project_id,
         project_name=project_name,
+        source_type=folder.source_type,
+        source_path=folder.source_path,
+        storage_path=folder.storage_path,
+        source_share_id=folder.source_share_id,
+        is_read_only=folder.is_read_only,
         is_active=folder.is_active,
         watch_enabled=folder.watch_enabled,
         device_id=folder.device_id,
@@ -56,6 +68,8 @@ async def create_folder(data: FolderCreate, db: AsyncSession = Depends(get_db)) 
     folder = Folder(
         path=data.path,
         name=data.name,
+        source_type="local",
+        source_path=data.path,
         project_id=data.project_id,
         watch_enabled=data.watch_enabled,
         device_id=data.device_id,
@@ -84,8 +98,15 @@ async def update_folder(
     folder = result.scalar_one_or_none()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
+    if folder.is_read_only and (data.path is not None or data.watch_enabled is not None):
+        raise HTTPException(
+            status_code=403,
+            detail="Remote mirrored folders cannot change path or watch settings from this endpoint",
+        )
     if data.path is not None:
         folder.path = data.path
+        if folder.source_type == "local":
+            folder.source_path = data.path
     if data.name is not None:
         folder.name = data.name
     if data.project_id is not None:
@@ -120,6 +141,11 @@ async def delete_folder(folder_id: str, db: AsyncSession = Depends(get_db)) -> N
     folder = result.scalar_one_or_none()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
+    if folder.is_read_only:
+        raise HTTPException(
+            status_code=403,
+            detail="Remote mirrored folders must be removed from the device share instead",
+        )
     await db.delete(folder)
     await db.commit()
     await folder_watcher.refresh_from_database()
@@ -136,9 +162,14 @@ async def scan_folder_endpoint(
     try:
         summary = await scan_folder(folder, db)
     except ValueError as exc:
-        await folder_watcher.mark_scan_result(folder, error=str(exc))
+        await folder_watcher.mark_scan_result(folder, error=str(exc), full_reconcile=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await folder_watcher.mark_scan_result(folder, error=None)
+    await folder_watcher.mark_scan_result(
+        folder,
+        error=None,
+        scan_summary=summary,
+        full_reconcile=True,
+    )
     return summary
 
 
@@ -147,8 +178,45 @@ async def reindex_all_folders() -> dict[str, int]:
     return await folder_watcher.force_rescan_all()
 
 
+@router.post(
+    "/{folder_id}/rebuild",
+    response_model=BackgroundJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def rebuild_folder(folder_id: str, db: AsyncSession = Depends(get_db)) -> BackgroundJobResponse:
+    folder = (await db.execute(select(Folder).where(Folder.id == folder_id))).scalar_one_or_none()
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    job = await create_background_job(
+        db,
+        job_type=JOB_TYPE_REBUILD_FOLDER,
+        target_type="folder",
+        target_id=folder.id,
+        payload={"folder_id": folder.id},
+        dedupe=True,
+    )
+    return BackgroundJobResponse.model_validate(serialize_background_job(job))
+
+
+@router.post(
+    "/rebuild-all",
+    response_model=BackgroundJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def rebuild_all_folders(db: AsyncSession = Depends(get_db)) -> BackgroundJobResponse:
+    job = await create_background_job(
+        db,
+        job_type=JOB_TYPE_REBUILD_ALL,
+        target_type="folders",
+        payload={"scope": "all-active-folders"},
+        dedupe=True,
+    )
+    return BackgroundJobResponse.model_validate(serialize_background_job(job))
+
+
 @router.get("/watch/status", status_code=status.HTTP_200_OK)
-async def get_watch_status() -> list[dict[str, str | bool | None]]:
+async def get_watch_status() -> list[dict[str, object | None]]:
     return await folder_watcher.get_statuses()
 
 

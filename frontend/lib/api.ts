@@ -1,4 +1,9 @@
 import type {
+  BackupFile,
+  BackupValidation,
+  BackgroundJob,
+  Device,
+  DeviceShare,
   Document,
   DocumentFilters,
   DocumentListItem,
@@ -7,6 +12,10 @@ import type {
   DocumentWriteEvent,
   Folder,
   FolderCreate,
+  EnrollmentToken,
+  SyncHealth,
+  SystemHealth,
+  SystemRuntime,
   Project,
   ProjectCreate,
   ScanSummary,
@@ -133,6 +142,14 @@ export async function getWatchStatuses(): Promise<WatchStatus[]> {
   return apiFetch<WatchStatus[]>("/api/v1/folders/watch/status")
 }
 
+export async function rebuildFolder(id: string): Promise<BackgroundJob> {
+  return apiFetch<BackgroundJob>(`/api/v1/folders/${id}/rebuild`, { method: "POST" })
+}
+
+export async function rebuildAllFolders(): Promise<BackgroundJob> {
+  return apiFetch<BackgroundJob>("/api/v1/folders/rebuild-all", { method: "POST" })
+}
+
 // --- Documents ---
 
 export async function getDocuments(filters: DocumentFilters = {}): Promise<DocumentListItem[]> {
@@ -197,4 +214,92 @@ export async function searchDocuments(query: string, filters: DocumentFilters = 
 
 export async function getStats(): Promise<Stats> {
   return apiFetch<Stats>("/api/v1/stats/")
+}
+
+// --- System / Operations ---
+
+export async function getSystemHealth(): Promise<SystemHealth> {
+  return apiFetch<SystemHealth>("/api/v1/system/health")
+}
+
+export async function getSystemRuntime(): Promise<SystemRuntime> {
+  return apiFetch<SystemRuntime>("/api/v1/system/runtime")
+}
+
+export async function triggerDriftCheck(): Promise<BackgroundJob> {
+  return apiFetch<BackgroundJob>("/api/v1/system/drift-check", { method: "POST" })
+}
+
+export async function createSystemBackup(): Promise<BackgroundJob> {
+  return apiFetch<BackgroundJob>("/api/v1/system/backup", { method: "POST" })
+}
+
+export async function getSystemBackups(): Promise<BackupFile[]> {
+  return apiFetch<BackupFile[]>("/api/v1/system/backups")
+}
+
+export async function validateSystemBackup(backupName: string): Promise<BackupValidation> {
+  return apiFetch<BackupValidation>("/api/v1/system/restore/validate", {
+    method: "POST",
+    body: JSON.stringify({ backup_name: backupName }),
+  })
+}
+
+export async function restoreSystemBackup(backupName: string): Promise<BackgroundJob> {
+  return apiFetch<BackgroundJob>("/api/v1/system/restore", {
+    method: "POST",
+    body: JSON.stringify({ backup_name: backupName }),
+  })
+}
+
+export async function getSupportBundle(): Promise<unknown> {
+  return apiFetch<unknown>("/api/v1/system/support-bundle")
+}
+
+export async function getJobs(status?: string, limit = 50): Promise<BackgroundJob[]> {
+  return apiFetch<BackgroundJob[]>(`/api/v1/jobs/${toQueryString({ status, limit })}`)
+}
+
+export async function getJob(id: string): Promise<BackgroundJob> {
+  return apiFetch<BackgroundJob>(`/api/v1/jobs/${id}`)
+}
+
+// --- Layer 5 Sync / Devices ---
+
+export async function createEnrollmentToken(note?: string): Promise<EnrollmentToken> {
+  return apiFetch<EnrollmentToken>("/api/v1/sync/enrollment-tokens", {
+    method: "POST",
+    body: JSON.stringify({ note: note || null, expires_in_minutes: 30 }),
+  })
+}
+
+export async function getDevices(): Promise<Device[]> {
+  return apiFetch<Device[]>("/api/v1/sync/devices")
+}
+
+export async function revokeDevice(id: string): Promise<Device> {
+  return apiFetch<Device>(`/api/v1/sync/devices/${id}/revoke`, { method: "POST" })
+}
+
+export async function deleteDevice(id: string): Promise<void> {
+  return apiFetch<void>(`/api/v1/sync/devices/${id}`, { method: "DELETE" })
+}
+
+export async function getDeviceShares(deviceId: string): Promise<DeviceShare[]> {
+  return apiFetch<DeviceShare[]>(`/api/v1/sync/devices/${deviceId}/shares`)
+}
+
+export async function updateDeviceShare(deviceId: string, shareId: string, syncEnabled: boolean): Promise<DeviceShare> {
+  return apiFetch<DeviceShare>(`/api/v1/sync/devices/${deviceId}/shares/${shareId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ sync_enabled: syncEnabled }),
+  })
+}
+
+export async function deleteDeviceShare(deviceId: string, shareId: string): Promise<void> {
+  return apiFetch<void>(`/api/v1/sync/devices/${deviceId}/shares/${shareId}`, { method: "DELETE" })
+}
+
+export async function getSyncHealth(): Promise<SyncHealth> {
+  return apiFetch<SyncHealth>("/api/v1/sync/health")
 }

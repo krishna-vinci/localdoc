@@ -15,6 +15,9 @@ class DocumentResponse(DocumentBase):
     folder_name: str | None = None
     project_id: str | None = None
     project_name: str | None = None
+    source_type: str = "local"
+    source_path: str | None = None
+    is_read_only: bool = False
     content_hash: str
     content: str
     raw_content: str
@@ -56,6 +59,9 @@ class DocumentListResponse(BaseModel):
     folder_name: str | None = None
     project_id: str | None = None
     project_name: str | None = None
+    source_type: str = "local"
+    source_path: str | None = None
+    is_read_only: bool = False
     file_path: str
     file_name: str
     title: str

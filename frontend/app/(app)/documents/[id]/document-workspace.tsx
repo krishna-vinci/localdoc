@@ -23,7 +23,9 @@ import {
   getDocumentAudit,
   getDocumentVersion,
   getDocumentVersions,
+  rebuildFolder,
   restoreDocumentVersion,
+  scanFolder,
   saveDocument,
 } from "@/lib/api"
 import { formatTimestamp } from "@/lib/format"
@@ -54,6 +56,8 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
   const [message, setMessage] = useState("")
   const [saving, setSaving] = useState(false)
   const [reloading, setReloading] = useState(false)
+  const [rescanning, setRescanning] = useState(false)
+  const [rebuildingFolder, setRebuildingFolder] = useState(false)
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null)
   const [versions, setVersions] = useState<DocumentVersionSummary[]>([])
   const [auditEvents, setAuditEvents] = useState<DocumentWriteEvent[]>([])
@@ -61,6 +65,7 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
   const [historyLoading, setHistoryLoading] = useState(true)
   const [versionLoadingId, setVersionLoadingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const tags = useMemo(
     () =>
@@ -107,6 +112,7 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
   async function handleReload() {
     setReloading(true)
     setError(null)
+    setNotice(null)
     try {
       const refreshed = await getDocument(document.id)
       setDocument(refreshed)
@@ -122,6 +128,7 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
   async function handleSave() {
     setSaving(true)
     setError(null)
+    setNotice(null)
     try {
       const updated = await saveDocument(document.id, {
         raw_content: editorValue,
@@ -139,9 +146,38 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
     }
   }
 
+  async function handleRescanFolder() {
+    setRescanning(true)
+    setError(null)
+    setNotice(null)
+    try {
+      await scanFolder(document.folder_id)
+      await handleReload()
+    } catch (scanError) {
+      setError(scanError instanceof Error ? scanError.message : "Failed to rescan folder")
+    } finally {
+      setRescanning(false)
+    }
+  }
+
+  async function handleRebuildFolder() {
+    setRebuildingFolder(true)
+    setError(null)
+    setNotice(null)
+    try {
+      await rebuildFolder(document.folder_id)
+      setNotice("Queued folder rebuild. Check the Operations page for progress.")
+    } catch (rebuildError) {
+      setError(rebuildError instanceof Error ? rebuildError.message : "Failed to queue folder rebuild")
+    } finally {
+      setRebuildingFolder(false)
+    }
+  }
+
   async function handleSelectVersion(versionId: string) {
     setVersionLoadingId(versionId)
     setError(null)
+    setNotice(null)
     try {
       setSelectedVersion(await getDocumentVersion(document.id, versionId))
     } catch (versionError) {
@@ -157,6 +193,7 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
 
     setRestoringVersionId(version.id)
     setError(null)
+    setNotice(null)
     try {
       const restored = await restoreDocumentVersion(document.id, version.id, {
         expected_content_hash: expectedHash,
@@ -188,6 +225,8 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-bold tracking-tight">{document.title}</h1>
             <Badge variant="outline">v{document.version_counter}</Badge>
+            <Badge variant="outline">{document.source_type === "remote_mirror" ? "remote mirror" : "local"}</Badge>
+            {document.is_read_only && <Badge variant="secondary">Read-only</Badge>}
             {document.has_unindexed_changes && <Badge variant="destructive">Disk changed</Badge>}
             {!document.file_exists && <Badge variant="destructive">Missing on disk</Badge>}
           </div>
@@ -196,6 +235,7 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
             {document.project_name && <span>{document.project_name}</span>}
             {document.folder_name && <span>{document.folder_name}</span>}
             <span>{document.file_path}</span>
+            {document.source_path && <span>{document.source_path}</span>}
           </div>
           {tags.length > 0 && (
             <div className="flex flex-wrap gap-1.5 pt-1">
@@ -213,14 +253,26 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
             {reloading ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <RefreshCw className="mr-1.5 size-4" />}
             Reload from disk
           </Button>
-          <Button onClick={() => void handleSave()} disabled={!document.file_exists || !dirty || saving}>
+          {(document.has_unindexed_changes || !document.file_exists) && (
+            <>
+              <Button variant="outline" onClick={() => void handleRescanFolder()} disabled={rescanning}>
+                {rescanning ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <RefreshCw className="mr-1.5 size-4" />}
+                Rescan folder
+              </Button>
+              <Button variant="outline" onClick={() => void handleRebuildFolder()} disabled={rebuildingFolder}>
+                {rebuildingFolder ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <AlertTriangle className="mr-1.5 size-4" />}
+                Queue rebuild
+              </Button>
+            </>
+          )}
+          <Button onClick={() => void handleSave()} disabled={document.is_read_only || !document.file_exists || !dirty || saving}>
             {saving ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <Save className="mr-1.5 size-4" />}
-            Save changes
+            {document.is_read_only ? "Read-only mirror" : "Save changes"}
           </Button>
         </div>
       </div>
 
-      {(document.has_unindexed_changes || !document.file_exists || error) && (
+      {(document.has_unindexed_changes || !document.file_exists || error || notice) && (
         <div className="space-y-3">
           {!document.file_exists && (
             <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -232,9 +284,19 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
               The file changed on disk outside the app. Reload before saving so you do not overwrite newer content.
             </div>
           )}
+          {document.is_read_only && (
+            <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+              This document comes from a mirrored remote device share. Editing is disabled on the central node for Layer 5.
+            </div>
+          )}
           {error && (
             <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
               {error}
+            </div>
+          )}
+          {notice && (
+            <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-foreground">
+              {notice}
             </div>
           )}
         </div>
@@ -398,7 +460,7 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
                           variant="ghost"
                           size="sm"
                           onClick={() => void handleRestore(version)}
-                          disabled={restoringVersionId === version.id || !document.file_exists}
+                          disabled={document.is_read_only || restoringVersionId === version.id || !document.file_exists}
                         >
                           {restoringVersionId === version.id ? (
                             <Loader2 className="size-3.5 animate-spin" />
