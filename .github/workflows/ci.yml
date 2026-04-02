@@ -27,7 +27,7 @@ jobs:
         run: pip install uv
 
       - name: Install backend dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev
         working-directory: ./backend
 
       - name: Run backend linter (ruff)

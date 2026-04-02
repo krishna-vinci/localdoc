@@ -25,9 +25,11 @@ Thumbs.db
 
 # Docker
 .docker/
+backend/public/agent/
 
 # PostgreSQL data
 postgres_data/
+backend/replicas/
 
 # Environment secrets
 .env
@@ -41,6 +43,10 @@ htmlcov/
 
 # Misc
 *.log
+agent/localdocs-agent
 
 # Reference code
 memos/
+
+# Local working reports
+docs/implementation-status.md

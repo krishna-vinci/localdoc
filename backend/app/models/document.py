@@ -1,9 +1,19 @@
+from __future__ import annotations
+
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import uuid4
-from sqlalchemy import String, DateTime, Text, Boolean, ForeignKey, Index
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.folder import Folder
+    from app.models.document_audit import DocumentWriteEvent
+    from app.models.document_version import DocumentVersion
 
 
 class Document(Base):
@@ -24,6 +34,11 @@ class Document(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     frontmatter: Mapped[str] = mapped_column(Text, nullable=True)
     tags: Mapped[str] = mapped_column(String(512), nullable=True)
+    status: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    headings: Mapped[str | None] = mapped_column(Text, nullable=True)
+    links: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tasks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_count: Mapped[int] = mapped_column(Integer, default=0)
     size_bytes: Mapped[int] = mapped_column(default=0)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     device_id: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -32,11 +47,19 @@ class Document(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    version_counter: Mapped[int] = mapped_column(Integer, default=0)
 
-    folder: Mapped["Folder"] = relationship("Folder", back_populates="documents")
+    folder: Mapped[Folder] = relationship("Folder", back_populates="documents")
+    versions: Mapped[list[DocumentVersion]] = relationship(
+        "DocumentVersion", back_populates="document", cascade="all, delete-orphan"
+    )
+    write_events: Mapped[list[DocumentWriteEvent]] = relationship(
+        "DocumentWriteEvent", back_populates="document", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_documents_folder_id", "folder_id"),
         Index("ix_documents_content_hash", "content_hash"),
         Index("ix_documents_file_path", "file_path"),
+        Index("ix_documents_status", "status"),
     )

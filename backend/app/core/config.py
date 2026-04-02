@@ -1,5 +1,8 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app import __version__
 
 
 class Settings(BaseSettings):
@@ -12,7 +15,7 @@ class Settings(BaseSettings):
 
     # App
     APP_NAME: str = "LocalDocs Hub"
-    APP_VERSION: str = "0.1.0"
+    APP_VERSION: str = __version__
     DEBUG: bool = False
 
     # Server
@@ -34,6 +37,16 @@ class Settings(BaseSettings):
 
     # File watching
     WATCHDEBOUNCE_SECONDS: float = 0.5
+    FILESYSTEM_ROOT: str = ""
+
+    # Layer 4 operations
+    BACKUP_DIR: str = ""
+
+    # Layer 5 replica storage
+    REPLICA_ROOT: str = ""
+
+    # Layer 5 thin-agent distributions
+    AGENT_DIST_DIR: str = ""
 
 
 @lru_cache
