@@ -309,6 +309,22 @@ export interface DeviceShare {
   updated_at: string
 }
 
+export interface DeviceShareRequest {
+  id: string
+  device_id: string
+  display_name: string
+  source_path: string
+  include_globs: string[]
+  exclude_globs: string[]
+  sync_enabled: boolean
+  status: string
+  response_message: string | null
+  requested_at: string
+  responded_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface SyncFailure {
   id: string
   external_batch_id: string

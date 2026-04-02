@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-var agentVersion = "0.1.0"
+var agentVersion = "0.1.0-alpha.1"
 
 type Config struct {
 	ServerURL   string       `json:"server_url"`
@@ -30,6 +30,17 @@ type Config struct {
 	Hostname    string       `json:"hostname"`
 	Platform    string       `json:"platform"`
 	Shares      []AgentShare `json:"shares"`
+}
+
+type ShareRequest struct {
+	ID              string   `json:"id"`
+	DisplayName     string   `json:"display_name"`
+	SourcePath      string   `json:"source_path"`
+	IncludeGlobs    []string `json:"include_globs"`
+	ExcludeGlobs    []string `json:"exclude_globs"`
+	SyncEnabled     bool     `json:"sync_enabled"`
+	Status          string   `json:"status"`
+	ResponseMessage string   `json:"response_message"`
 }
 
 type AgentShare struct {
@@ -76,7 +87,13 @@ type shareResponse struct {
 }
 
 type agentConfigResponse struct {
-	Shares []AgentShare `json:"shares"`
+	Shares        []AgentShare   `json:"shares"`
+	ShareRequests []ShareRequest `json:"share_requests"`
+}
+
+type shareRequestDecision struct {
+	Approve         bool   `json:"approve"`
+	ResponseMessage string `json:"response_message,omitempty"`
 }
 
 type heartbeatRequest struct {
@@ -124,12 +141,31 @@ func main() {
 	switch os.Args[1] {
 	case "pair":
 		must(runPair(os.Args[2:]))
+	case "pending":
+		must(runPending())
+	case "approve":
+		must(runShareRequestDecision(os.Args[2:], true))
+	case "deny":
+		must(runShareRequestDecision(os.Args[2:], false))
+	case "shares":
+		must(runListShares())
 	case "add-share":
 		must(runAddShare(os.Args[2:]))
+	case "share":
+		if len(os.Args) > 2 && os.Args[2] == "add" {
+			must(runAddShare(os.Args[3:]))
+		} else {
+			printUsage()
+			os.Exit(1)
+		}
 	case "sync-once":
+		must(runSyncOnce())
+	case "sync":
 		must(runSyncOnce())
 	case "run":
 		must(runLoop(os.Args[2:]))
+	case "config":
+		must(showConfig())
 	case "show-config":
 		must(showConfig())
 	default:
@@ -139,13 +175,18 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("LocalDocs thin agent")
+	fmt.Println("LocalDocs CLI")
 	fmt.Println("Commands:")
 	fmt.Println("  pair --server URL --token TOKEN [--name NAME]")
+	fmt.Println("  pending")
+	fmt.Println("  approve REQUEST_ID")
+	fmt.Println("  deny REQUEST_ID [--message TEXT]")
+	fmt.Println("  shares")
 	fmt.Println("  add-share --path PATH [--name NAME] [--include GLOB] [--exclude GLOB]")
-	fmt.Println("  sync-once")
+	fmt.Println("  share add --path PATH [--name NAME] [--include GLOB] [--exclude GLOB]")
+	fmt.Println("  sync")
 	fmt.Println("  run [--interval-seconds 30]")
-	fmt.Println("  show-config")
+	fmt.Println("  config")
 }
 
 func must(err error) {
@@ -155,25 +196,46 @@ func must(err error) {
 	}
 }
 
-func configFilePath() (string, error) {
+func currentConfigFilePath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "localdocs-agent")
+	path := filepath.Join(dir, "localdocs")
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return "", err
 	}
 	return filepath.Join(path, "config.json"), nil
 }
 
+func legacyConfigFilePath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "localdocs-agent", "config.json"), nil
+}
+
 func loadConfig() (*Config, error) {
-	path, err := configFilePath()
+	path, err := currentConfigFilePath()
 	if err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			legacyPath, legacyErr := legacyConfigFilePath()
+			if legacyErr == nil {
+				legacyData, legacyReadErr := os.ReadFile(legacyPath)
+				if legacyReadErr == nil {
+					var cfg Config
+					if unmarshalErr := json.Unmarshal(legacyData, &cfg); unmarshalErr == nil {
+						return &cfg, nil
+					}
+				}
+			}
+			return nil, fmt.Errorf("LocalDocs is installed but not paired yet; run 'localdocs pair --server http://YOUR_SERVER_HOST:4320 --token YOUR_TOKEN'")
+		}
 		return nil, err
 	}
 	var cfg Config
@@ -184,7 +246,7 @@ func loadConfig() (*Config, error) {
 }
 
 func saveConfig(cfg *Config) error {
-	path, err := configFilePath()
+	path, err := currentConfigFilePath()
 	if err != nil {
 		return err
 	}
@@ -303,6 +365,93 @@ func showConfig() error {
 	return nil
 }
 
+func runPending() error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if err := sendHeartbeat(cfg); err != nil {
+		return err
+	}
+	resp, err := syncRemoteConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if err := saveConfig(cfg); err != nil {
+		return err
+	}
+	if len(resp.ShareRequests) == 0 {
+		fmt.Println("No pending share requests.")
+		return nil
+	}
+	for _, request := range resp.ShareRequests {
+		fmt.Printf("%s\t%s\t%s\n", request.ID, request.DisplayName, request.SourcePath)
+	}
+	return nil
+}
+
+func runShareRequestDecision(args []string, approve bool) error {
+	if len(args) == 0 {
+		if approve {
+			return errors.New("usage: localdocs approve REQUEST_ID")
+		}
+		return errors.New("usage: localdocs deny REQUEST_ID [--message TEXT]")
+	}
+	requestID := args[0]
+	fs := flag.NewFlagSet("share-request-decision", flag.ContinueOnError)
+	message := fs.String("message", "", "Optional response message")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if err := sendHeartbeat(cfg); err != nil {
+		return err
+	}
+	if err := doJSON(
+		http.MethodPost,
+		fmt.Sprintf("%s/api/v1/sync/agents/share-requests/%s/decision", cfg.ServerURL, requestID),
+		cfg.DeviceToken,
+		shareRequestDecision{Approve: approve, ResponseMessage: *message},
+		nil,
+	); err != nil {
+		return err
+	}
+	decision := "denied"
+	if approve {
+		decision = "approved"
+	}
+	if _, err := syncRemoteConfig(cfg); err == nil {
+		_ = saveConfig(cfg)
+	}
+	fmt.Printf("Share request %s %s\n", requestID, decision)
+	return nil
+}
+
+func runListShares() error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	resp, err := syncRemoteConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if err := saveConfig(cfg); err != nil {
+		return err
+	}
+	if len(resp.Shares) == 0 {
+		fmt.Println("No shares configured.")
+		return nil
+	}
+	for _, share := range resp.Shares {
+		fmt.Printf("%s\t%s\t%s\n", share.ID, share.DisplayName, share.SourcePath)
+	}
+	return nil
+}
+
 func runLoop(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	intervalSeconds := fs.Int("interval-seconds", 30, "Full sync interval in seconds")
@@ -325,15 +474,19 @@ func runSyncOnce() error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if len(cfg.Shares) == 0 {
-		fmt.Println("no shares configured; skipping sync")
-		return nil
-	}
 	if err := sendHeartbeat(cfg); err != nil {
 		return err
 	}
-	if err := syncRemoteConfig(cfg); err != nil {
+	resp, err := syncRemoteConfig(cfg)
+	if err != nil {
 		return err
+	}
+	if len(resp.ShareRequests) > 0 {
+		fmt.Fprintf(os.Stderr, "%d pending share request(s); run 'localdocs pending' to review them\n", len(resp.ShareRequests))
+	}
+	if len(cfg.Shares) == 0 {
+		fmt.Println("No shares configured; skipping sync.")
+		return saveConfig(cfg)
 	}
 	for i := range cfg.Shares {
 		if !cfg.Shares[i].SyncEnabled {
@@ -384,10 +537,10 @@ func upsertShareRemote(cfg *Config, share *AgentShare) error {
 	return nil
 }
 
-func syncRemoteConfig(cfg *Config) error {
+func syncRemoteConfig(cfg *Config) (*agentConfigResponse, error) {
 	var resp agentConfigResponse
 	if err := doJSON(http.MethodGet, cfg.ServerURL+"/api/v1/sync/agents/config", cfg.DeviceToken, nil, &resp); err != nil {
-		return err
+		return nil, err
 	}
 	localByID := make(map[string]AgentShare, len(cfg.Shares))
 	localUnsynced := make([]AgentShare, 0)
@@ -407,7 +560,7 @@ func syncRemoteConfig(cfg *Config) error {
 	}
 	nextShares = append(nextShares, localUnsynced...)
 	cfg.Shares = nextShares
-	return nil
+	return &resp, nil
 }
 
 func syncShare(cfg *Config, share *AgentShare) error {

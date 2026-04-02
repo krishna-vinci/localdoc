@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Index, String, Text
+from sqlalchemy import DateTime, Index, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,6 +12,7 @@ from app.core.database import Base
 
 if TYPE_CHECKING:
     from app.models.device_share import DeviceShare
+    from app.models.device_share_request import DeviceShareRequest
     from app.models.enrollment_token import EnrollmentToken
     from app.models.sync_batch import SyncBatch
 
@@ -38,6 +39,9 @@ class Device(Base):
 
     shares: Mapped[list[DeviceShare]] = relationship(
         "DeviceShare", back_populates="device", cascade="all, delete-orphan"
+    )
+    share_requests: Mapped[list[DeviceShareRequest]] = relationship(
+        "DeviceShareRequest", back_populates="device", cascade="all, delete-orphan"
     )
     enrollment_tokens: Mapped[list[EnrollmentToken]] = relationship(
         "EnrollmentToken", back_populates="device", cascade="all, delete-orphan"

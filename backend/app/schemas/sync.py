@@ -50,6 +50,35 @@ class DeviceShareUpdateRequest(BaseModel):
     sync_enabled: bool
 
 
+class DeviceShareRequestCreateRequest(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=255)
+    source_path: str = Field(..., min_length=1, max_length=2048)
+    include_globs: list[str] = Field(default_factory=list)
+    exclude_globs: list[str] = Field(default_factory=list)
+    sync_enabled: bool = True
+
+
+class DeviceShareRequestDecisionRequest(BaseModel):
+    approve: bool
+    response_message: str | None = Field(None, max_length=2048)
+
+
+class DeviceShareRequestResponse(BaseModel):
+    id: str
+    device_id: str
+    display_name: str
+    source_path: str
+    include_globs: list[str]
+    exclude_globs: list[str]
+    sync_enabled: bool
+    status: str
+    response_message: str | None
+    requested_at: datetime
+    responded_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class DeviceShareResponse(BaseModel):
     id: str
     device_id: str
@@ -120,6 +149,7 @@ class SyncBatchResponse(BaseModel):
 class AgentConfigResponse(BaseModel):
     device: DeviceResponse
     shares: list[DeviceShareResponse]
+    share_requests: list[DeviceShareRequestResponse] = Field(default_factory=list)
 
 
 class SyncHealthResponse(BaseModel):

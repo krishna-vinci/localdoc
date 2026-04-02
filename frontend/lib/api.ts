@@ -4,6 +4,7 @@ import type {
   BackgroundJob,
   Device,
   DeviceShare,
+  DeviceShareRequest,
   Document,
   DocumentFilters,
   DocumentListItem,
@@ -287,6 +288,26 @@ export async function deleteDevice(id: string): Promise<void> {
 
 export async function getDeviceShares(deviceId: string): Promise<DeviceShare[]> {
   return apiFetch<DeviceShare[]>(`/api/v1/sync/devices/${deviceId}/shares`)
+}
+
+export async function getDeviceShareRequests(deviceId: string): Promise<DeviceShareRequest[]> {
+  return apiFetch<DeviceShareRequest[]>(`/api/v1/sync/devices/${deviceId}/share-requests`)
+}
+
+export async function createDeviceShareRequest(
+  deviceId: string,
+  data: {
+    display_name: string
+    source_path: string
+    include_globs: string[]
+    exclude_globs: string[]
+    sync_enabled: boolean
+  }
+): Promise<DeviceShareRequest> {
+  return apiFetch<DeviceShareRequest>(`/api/v1/sync/devices/${deviceId}/share-requests`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
 }
 
 export async function updateDeviceShare(deviceId: string, shareId: string, syncEnabled: boolean): Promise<DeviceShare> {

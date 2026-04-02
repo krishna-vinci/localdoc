@@ -25,9 +25,11 @@ Thumbs.db
 
 # Docker
 .docker/
+backend/public/agent/
 
 # PostgreSQL data
 postgres_data/
+backend/replicas/
 
 # Environment secrets
 .env

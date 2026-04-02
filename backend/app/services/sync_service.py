@@ -20,11 +20,12 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.device import Device
 from app.models.device_share import DeviceShare
+from app.models.device_share_request import DeviceShareRequest
 from app.models.enrollment_token import EnrollmentToken
 from app.models.folder import Folder
 from app.models.share_file import ShareFile
 from app.models.sync_batch import SyncBatch
-from app.schemas.sync import DeviceResponse, DeviceShareResponse
+from app.schemas.sync import DeviceResponse, DeviceShareRequestResponse, DeviceShareResponse
 from app.services.scanner import sync_document_from_filesystem
 
 
@@ -57,6 +58,13 @@ def get_replica_root() -> Path:
     if settings.REPLICA_ROOT:
         return Path(settings.REPLICA_ROOT)
     return Path(__file__).resolve().parents[2] / "replicas"
+
+
+def get_agent_distribution_root() -> Path:
+    configured = settings.AGENT_DIST_DIR
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[2] / "public" / "agent"
 
 
 async def ensure_replica_root() -> Path:
@@ -135,6 +143,24 @@ def serialize_share(share: DeviceShare) -> DeviceShareResponse:
         last_error_at=None,
         created_at=share.created_at,
         updated_at=share.updated_at,
+    )
+
+
+def serialize_share_request(request: DeviceShareRequest) -> DeviceShareRequestResponse:
+    return DeviceShareRequestResponse(
+        id=request.id,
+        device_id=request.device_id,
+        display_name=request.display_name,
+        source_path=request.source_path,
+        include_globs=_parse_globs(request.include_globs),
+        exclude_globs=_parse_globs(request.exclude_globs),
+        sync_enabled=request.sync_enabled,
+        status=request.status,
+        response_message=request.response_message,
+        requested_at=request.requested_at,
+        responded_at=request.responded_at,
+        created_at=request.created_at,
+        updated_at=request.updated_at,
     )
 
 
@@ -565,6 +591,8 @@ async def apply_sync_batch(
         await db.commit()
         await db.refresh(batch)
         return batch
+    except HTTPException:
+        raise
     except Exception as exc:
         await db.rollback()
         failed_batch = await db.get(SyncBatch, batch.id)
@@ -639,6 +667,8 @@ async def apply_snapshot_complete(
         await db.commit()
         await db.refresh(batch)
         return batch
+    except HTTPException:
+        raise
     except Exception as exc:
         await db.rollback()
         failed_batch = await db.get(SyncBatch, batch.id)
@@ -744,6 +774,116 @@ async def list_shares_for_device(db: AsyncSession, device_id: str) -> list[Devic
         .order_by(DeviceShare.created_at.asc())
     )
     return list(result.scalars().all())
+
+
+async def list_share_requests_for_device(
+    db: AsyncSession, device_id: str, *, pending_only: bool = False
+) -> list[DeviceShareRequest]:
+    query = (
+        select(DeviceShareRequest)
+        .where(DeviceShareRequest.device_id == device_id)
+        .order_by(DeviceShareRequest.requested_at.desc())
+    )
+    if pending_only:
+        query = query.where(DeviceShareRequest.status == "pending")
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def create_share_request(
+    db: AsyncSession,
+    *,
+    device_id: str,
+    display_name: str,
+    source_path: str,
+    include_globs: list[str],
+    exclude_globs: list[str],
+    sync_enabled: bool,
+) -> DeviceShareRequest:
+    device = await db.get(Device, device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    existing_pending = (
+        await db.execute(
+            select(DeviceShareRequest).where(
+                DeviceShareRequest.device_id == device_id,
+                DeviceShareRequest.source_path == source_path,
+                DeviceShareRequest.status == "pending",
+            )
+        )
+    ).scalar_one_or_none()
+    if existing_pending is not None:
+        existing_pending.display_name = display_name
+        existing_pending.include_globs = _serialize_globs(include_globs)
+        existing_pending.exclude_globs = _serialize_globs(exclude_globs)
+        existing_pending.sync_enabled = sync_enabled
+        existing_pending.response_message = None
+        existing_pending.responded_at = None
+        await db.commit()
+        await db.refresh(existing_pending)
+        return existing_pending
+
+    share_request = DeviceShareRequest(
+        device_id=device_id,
+        display_name=display_name,
+        source_path=source_path,
+        include_globs=_serialize_globs(include_globs),
+        exclude_globs=_serialize_globs(exclude_globs),
+        sync_enabled=sync_enabled,
+        status="pending",
+        requested_at=_utcnow(),
+    )
+    db.add(share_request)
+    await db.commit()
+    await db.refresh(share_request)
+    return share_request
+
+
+async def respond_to_share_request(
+    db: AsyncSession,
+    *,
+    device: Device,
+    request_id: str,
+    approve: bool,
+    response_message: str | None,
+) -> tuple[DeviceShareRequest, DeviceShare | None]:
+    share_request = (
+        await db.execute(
+            select(DeviceShareRequest).where(
+                DeviceShareRequest.id == request_id,
+                DeviceShareRequest.device_id == device.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if share_request is None:
+        raise HTTPException(status_code=404, detail="Share request not found")
+    if share_request.status != "pending":
+        raise HTTPException(status_code=409, detail="Share request already processed")
+
+    created_share: DeviceShare | None = None
+    if approve:
+        created_share = await upsert_share(
+            db,
+            device=device,
+            share_id=None,
+            display_name=share_request.display_name,
+            source_path=share_request.source_path,
+            include_globs=_parse_globs(share_request.include_globs),
+            exclude_globs=_parse_globs(share_request.exclude_globs),
+            sync_enabled=share_request.sync_enabled,
+        )
+        share_request.status = "approved"
+    else:
+        share_request.status = "denied"
+
+    share_request.response_message = response_message
+    share_request.responded_at = _utcnow()
+    await db.commit()
+    await db.refresh(share_request)
+    if created_share is not None:
+        await db.refresh(created_share)
+    return share_request, created_share
 
 
 async def revoke_device(db: AsyncSession, device_id: str) -> Device:

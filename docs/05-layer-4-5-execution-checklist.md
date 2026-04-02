@@ -572,7 +572,7 @@ Reuse the Layer 4 DB-backed job model.
 - [ ] Go binary prototype
 - [ ] pair/enroll command
 - [ ] add-share command
-- [ ] sync-once command
+- [ ] sync command
 - [ ] service/run mode with periodic scan and replay
 
 #### Milestone 5.5 — sync operations UI

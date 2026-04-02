@@ -3,11 +3,11 @@ set -eu
 
 usage() {
   cat <<'EOF'
-Install LocalDocs thin agent from a local archive or URL.
+Install the LocalDocs CLI from a local archive or URL.
 
 Usage:
-  install-localdocs-agent.sh --archive /path/to/localdocs-agent-linux-amd64.tar.gz
-  install-localdocs-agent.sh --url https://host/path/localdocs-agent-linux-amd64.tar.gz
+  install-localdocs-agent.sh --archive /path/to/localdocs-linux-amd64.tar.gz
+  install-localdocs-agent.sh --url https://host/path/localdocs-linux-amd64.tar.gz
 
 Options:
   --archive PATH     Install from a local tar.gz archive
@@ -64,7 +64,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if [ -n "$ARCHIVE_URL" ]; then
-  ARCHIVE_PATH="$TMP_DIR/localdocs-agent.tar.gz"
+  ARCHIVE_PATH="$TMP_DIR/localdocs.tar.gz"
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$ARCHIVE_URL" -o "$ARCHIVE_PATH"
   elif command -v wget >/dev/null 2>&1; then
@@ -83,24 +83,24 @@ fi
 mkdir -p "$TMP_DIR/extract" "$INSTALL_DIR"
 tar -C "$TMP_DIR/extract" -xzf "$ARCHIVE_PATH"
 
-BINARY_PATH=$(find "$TMP_DIR/extract" -type f -name localdocs-agent | head -n 1)
+BINARY_PATH=$(find "$TMP_DIR/extract" -type f -name localdocs | head -n 1)
 if [ -z "$BINARY_PATH" ]; then
-  printf 'error: localdocs-agent binary not found in archive\n' >&2
+  printf 'error: localdocs binary not found in archive\n' >&2
   exit 1
 fi
 
-cp "$BINARY_PATH" "$INSTALL_DIR/localdocs-agent"
-chmod 755 "$INSTALL_DIR/localdocs-agent"
+cp "$BINARY_PATH" "$INSTALL_DIR/localdocs"
+chmod 755 "$INSTALL_DIR/localdocs"
 
-printf 'Installed localdocs-agent to %s/localdocs-agent\n' "$INSTALL_DIR"
+printf 'Installed localdocs to %s/localdocs\n' "$INSTALL_DIR"
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*)
-    printf 'Run: localdocs-agent show-config\n'
+    printf 'Run: localdocs config\n'
     ;;
   *)
     printf 'Add this to your shell profile if needed:\n'
     printf '  export PATH="%s:$PATH"\n' "$INSTALL_DIR"
-    printf 'Then run: localdocs-agent show-config\n'
+    printf 'Then run: localdocs config\n'
     ;;
 esac

@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     # App
     APP_NAME: str = "LocalDocs Hub"
-    APP_VERSION: str = "0.1.0"
+    APP_VERSION: str = "0.1.0-alpha.1"
     DEBUG: bool = False
 
     # Server
@@ -42,6 +42,9 @@ class Settings(BaseSettings):
 
     # Layer 5 replica storage
     REPLICA_ROOT: str = ""
+
+    # Layer 5 thin-agent distributions
+    AGENT_DIST_DIR: str = ""
 
 
 @lru_cache

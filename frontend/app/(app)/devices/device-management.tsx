@@ -19,8 +19,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   createEnrollmentToken,
+  createDeviceShareRequest,
   deleteDevice,
   deleteDeviceShare,
+  getDeviceShareRequests,
   getDeviceShares,
   getDevices,
   getSyncHealth,
@@ -28,7 +30,7 @@ import {
   updateDeviceShare,
 } from "@/lib/api"
 import { formatTimestamp } from "@/lib/format"
-import type { Device, DeviceShare, EnrollmentToken, SyncHealth } from "@/types"
+import type { Device, DeviceShare, DeviceShareRequest, EnrollmentToken, SyncHealth } from "@/types"
 
 function timestampToMs(value: string | null): number | null {
   if (!value) return null
@@ -78,24 +80,34 @@ export function DeviceManagement({
   initialDevices,
   initialSyncHealth,
   initialSharesByDevice,
+  initialShareRequestsByDevice,
   initialRenderedAt,
 }: {
   initialDevices: Device[]
   initialSyncHealth: SyncHealth
   initialSharesByDevice: Record<string, DeviceShare[]>
+  initialShareRequestsByDevice: Record<string, DeviceShareRequest[]>
   initialRenderedAt: string
 }) {
   const [devices, setDevices] = useState(initialDevices)
   const [sharesByDevice, setSharesByDevice] = useState(initialSharesByDevice)
+  const [shareRequestsByDevice, setShareRequestsByDevice] = useState(initialShareRequestsByDevice)
   const [syncHealth, setSyncHealth] = useState(initialSyncHealth)
   const [loading, setLoading] = useState(false)
   const [creatingToken, setCreatingToken] = useState(false)
   const [token, setToken] = useState<EnrollmentToken | null>(null)
-  const [copiedState, setCopiedState] = useState<"idle" | "copied">("idle")
+  const [copiedInstallState, setCopiedInstallState] = useState<"idle" | "copied">("idle")
+  const [copiedPairState, setCopiedPairState] = useState<"idle" | "copied">("idle")
   const [error, setError] = useState<string | null>(null)
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [renderedAtMs, setRenderedAtMs] = useState(() => timestampToMs(initialRenderedAt) ?? Date.now())
   const [pairingHost, setPairingHost] = useState("")
+  const [requestDrafts, setRequestDrafts] = useState<Record<string, {
+    display_name: string
+    source_path: string
+    include_globs: string
+    exclude_globs: string
+  }>>({})
 
   useEffect(() => {
     setRenderedAtMs(Date.now())
@@ -109,13 +121,15 @@ export function DeviceManagement({
     setError(null)
     try {
       const nextDevices = await getDevices()
-      const [nextSyncHealth, sharesEntries] = await Promise.all([
+      const [nextSyncHealth, sharesEntries, requestEntries] = await Promise.all([
         getSyncHealth(),
         Promise.all(nextDevices.map(async (device) => [device.id, await getDeviceShares(device.id)] as const)),
+        Promise.all(nextDevices.map(async (device) => [device.id, await getDeviceShareRequests(device.id)] as const)),
       ])
       setDevices(nextDevices)
       setSyncHealth(nextSyncHealth)
       setSharesByDevice(Object.fromEntries(sharesEntries))
+      setShareRequestsByDevice(Object.fromEntries(requestEntries))
       setRenderedAtMs(Date.now())
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : "Failed to refresh devices")
@@ -130,7 +144,7 @@ export function DeviceManagement({
     setError(null)
     try {
       setToken(await createEnrollmentToken())
-      setCopiedState("idle")
+      setCopiedPairState("idle")
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Failed to create token")
     } finally {
@@ -196,19 +210,75 @@ export function DeviceManagement({
     }
   }
 
+  function updateRequestDraft(
+    deviceId: string,
+    field: "display_name" | "source_path" | "include_globs" | "exclude_globs",
+    value: string
+  ) {
+    setRequestDrafts((current) => ({
+      ...current,
+      [deviceId]: {
+        display_name: current[deviceId]?.display_name ?? "",
+        source_path: current[deviceId]?.source_path ?? "",
+        include_globs: current[deviceId]?.include_globs ?? "",
+        exclude_globs: current[deviceId]?.exclude_globs ?? "",
+        [field]: value,
+      },
+    }))
+  }
+
+  async function handleCreateShareRequest(deviceId: string) {
+    const draft = requestDrafts[deviceId]
+    if (!draft?.display_name?.trim() || !draft?.source_path?.trim()) {
+      setError("Share name and source path are required")
+      return
+    }
+
+    setBusyKey(`create-request:${deviceId}`)
+    setError(null)
+    try {
+      await createDeviceShareRequest(deviceId, {
+        display_name: draft.display_name.trim(),
+        source_path: draft.source_path.trim(),
+        include_globs: draft.include_globs.split(",").map((item) => item.trim()).filter(Boolean),
+        exclude_globs: draft.exclude_globs.split(",").map((item) => item.trim()).filter(Boolean),
+        sync_enabled: true,
+      })
+      setRequestDrafts((current) => ({
+        ...current,
+        [deviceId]: { display_name: "", source_path: "", include_globs: "", exclude_globs: "" },
+      }))
+      await refresh()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Failed to create share request")
+      setBusyKey(null)
+    }
+  }
+
+  async function handleCopyInstallCommand() {
+    setError(null)
+    try {
+      await copyText(installCommand)
+      setCopiedInstallState("copied")
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : "Failed to copy install command")
+    }
+  }
+
   async function handleCopyPairCommand() {
     if (!pairingCommand) return
     setError(null)
     try {
       await copyText(pairingCommand)
-      setCopiedState("copied")
+      setCopiedPairState("copied")
     } catch (copyError) {
       setError(copyError instanceof Error ? copyError.message : "Failed to copy pairing command")
     }
   }
 
   const pairingServerUrl = normalizePairingServerUrl(pairingHost)
-  const pairingCommand = token ? `localdocs-agent pair --server ${pairingServerUrl} --token ${token.token}` : null
+  const installCommand = `curl -fsSL ${pairingServerUrl}/api/v1/sync/agent/install.sh | sh`
+  const pairingCommand = token ? `localdocs pair --server ${pairingServerUrl} --token ${token.token}` : null
 
   return (
     <div className="space-y-8">
@@ -237,34 +307,54 @@ export function DeviceManagement({
         </div>
       )}
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Self-hosted agent install</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-2">
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-muted-foreground">Central host / IP</span>
+              <Input
+                value={pairingHost}
+                onChange={(event) => setPairingHost(event.target.value)}
+                  placeholder="your-server-host"
+              />
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Use the IP or DNS name that the remote MacBook or Linux device can actually reach.
+            </p>
+          </div>
+          <code className="block overflow-x-auto rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
+            {installCommand}
+          </code>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => void handleCopyInstallCommand()}>
+              {copiedInstallState === "copied" ? <Check className="mr-1.5 size-4" /> : <Copy className="mr-1.5 size-4" />}
+              {copiedInstallState === "copied" ? "Copied install" : "Copy install command"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            First run <code>./scripts/build-agent-dist.sh</code> on the server to publish macOS, Linux, and Windows archives for self-hosted downloads.
+          </p>
+        </CardContent>
+      </Card>
+
       {token && pairingCommand && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Latest enrollment token</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="space-y-2">
-              <p className="text-sm text-muted-foreground">Use this once on the remote machine.</p>
-              <label className="block space-y-1">
-                <span className="text-xs font-medium text-muted-foreground">Central host / IP</span>
-                <Input
-                  value={pairingHost}
-                  onChange={(event) => setPairingHost(event.target.value)}
-                  placeholder="192.168.1.10"
-                />
-              </label>
-              <p className="text-xs text-muted-foreground">
-                Yes — replace HOST with the IP or DNS name that the remote device can reach. If you leave it as your current browser host, we prefill that for convenience.
-              </p>
-            </div>
+            <p className="text-sm text-muted-foreground">After install, pair the device once, then use <code>localdocs pending</code> to review any requested shares.</p>
             <code className="block overflow-x-auto rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
               {pairingCommand}
             </code>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <code className="block overflow-x-auto rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">{token.token}</code>
               <Button variant="outline" onClick={() => void handleCopyPairCommand()}>
-                {copiedState === "copied" ? <Check className="mr-1.5 size-4" /> : <Copy className="mr-1.5 size-4" />}
-                {copiedState === "copied" ? "Copied command" : "Copy pair command"}
+                {copiedPairState === "copied" ? <Check className="mr-1.5 size-4" /> : <Copy className="mr-1.5 size-4" />}
+                {copiedPairState === "copied" ? "Copied pair command" : "Copy pair command"}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">Expires {formatTimestamp(token.expires_at)}</p>
@@ -318,6 +408,13 @@ export function DeviceManagement({
         <div className="space-y-4">
           {devices.map((device) => {
             const shares = sharesByDevice[device.id] ?? []
+            const shareRequests = shareRequestsByDevice[device.id] ?? []
+            const requestDraft = requestDrafts[device.id] ?? {
+              display_name: "",
+              source_path: "",
+              include_globs: "",
+              exclude_globs: "",
+            }
             const lastSeenMs = timestampToMs(device.last_seen_at)
             const stale = lastSeenMs === null || renderedAtMs-lastSeenMs > 5 * 60 * 1000
             return (
@@ -356,6 +453,84 @@ export function DeviceManagement({
                         {busyKey === `delete-device:${device.id}` ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <Trash2 className="mr-1.5 size-4" />}
                         Delete device
                       </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Requested shares</p>
+                    <div className="rounded-lg border border-border p-3 space-y-3">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <label className="space-y-1">
+                          <span className="text-xs text-muted-foreground">Share name</span>
+                          <Input
+                            value={requestDraft.display_name}
+                            onChange={(event) => updateRequestDraft(device.id, "display_name", event.target.value)}
+                            placeholder="notes"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-xs text-muted-foreground">Remote source path</span>
+                          <Input
+                            value={requestDraft.source_path}
+                            onChange={(event) => updateRequestDraft(device.id, "source_path", event.target.value)}
+                            placeholder={device.platform === "darwin" ? "/Users/name/Documents/Notes" : "/home/user/notes"}
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-xs text-muted-foreground">Include globs</span>
+                          <Input
+                            value={requestDraft.include_globs}
+                            onChange={(event) => updateRequestDraft(device.id, "include_globs", event.target.value)}
+                            placeholder="notes/**/*.md"
+                          />
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-xs text-muted-foreground">Exclude globs</span>
+                          <Input
+                            value={requestDraft.exclude_globs}
+                            onChange={(event) => updateRequestDraft(device.id, "exclude_globs", event.target.value)}
+                            placeholder="**/drafts/**"
+                          />
+                        </label>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void handleCreateShareRequest(device.id)}
+                          disabled={busyKey === `create-request:${device.id}`}
+                        >
+                          {busyKey === `create-request:${device.id}` ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : null}
+                          Request share on device
+                        </Button>
+                        <p className="text-xs text-muted-foreground">
+                          The device user can review it with <code>localdocs pending</code> and approve it with <code>localdocs approve REQUEST_ID</code>.
+                        </p>
+                      </div>
+                      {shareRequests.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No share requests yet.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {shareRequests.map((request) => (
+                            <div key={request.id} className="rounded-md border border-border px-3 py-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-medium">{request.display_name}</p>
+                                <Badge variant={request.status === "approved" ? "secondary" : request.status === "denied" ? "destructive" : "outline"}>
+                                  {request.status}
+                                </Badge>
+                              </div>
+                              <p className="mt-1 text-xs text-muted-foreground">{request.source_path}</p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Requested {formatTimestamp(request.requested_at)}
+                                {request.responded_at ? ` · Responded ${formatTimestamp(request.responded_at)}` : ""}
+                              </p>
+                              {request.response_message && (
+                                <p className="mt-1 text-xs text-muted-foreground">{request.response_message}</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
 

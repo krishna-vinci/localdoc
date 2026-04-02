@@ -303,22 +303,22 @@ All routes stay under `/api/v1/`.
 ### 9.1 Agent-facing endpoints
 
 #### Enrollment and health
-- `POST /api/v1/agents/enroll`
-- `POST /api/v1/agents/heartbeat`
-- `GET /api/v1/agents/config`
+- `POST /api/v1/sync/agents/enroll`
+- `POST /api/v1/sync/agents/heartbeat`
+- `GET /api/v1/sync/agents/config`
 
 #### Share management
-- `POST /api/v1/agents/shares/upsert`
-- `POST /api/v1/agents/shares/{share_id}/disable`
+- `POST /api/v1/sync/agents/shares/upsert`
+- `POST /api/v1/sync/agents/shares/{share_id}/disable`
 
 #### Sync ingest
-- `POST /api/v1/agents/shares/{share_id}/snapshot/start`
-- `POST /api/v1/agents/shares/{share_id}/batch`
-- `POST /api/v1/agents/shares/{share_id}/snapshot/complete`
+- `POST /api/v1/sync/agents/shares/{share_id}/snapshot/start`
+- `POST /api/v1/sync/agents/shares/{share_id}/batch`
+- `POST /api/v1/sync/agents/shares/{share_id}/snapshot/complete`
 
 #### Replay/cursor
-- `GET /api/v1/agents/shares/{share_id}/cursor`
-- `POST /api/v1/agents/shares/{share_id}/cursor/ack`
+- `GET /api/v1/sync/agents/shares/{share_id}/cursor`
+- `POST /api/v1/sync/agents/shares/{share_id}/cursor/ack`
 
 ### 9.2 Browser-facing endpoints
 
@@ -701,7 +701,7 @@ Before remote agents, the central node must already have:
 - Go prototype
 - enroll command
 - add-share command
-- sync-once command
+- sync command
 - service/run mode with periodic reconcile and replay
 
 ### Milestone 6 — Controlled rollout

@@ -1,6 +1,8 @@
 import json
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -11,6 +13,9 @@ from app.schemas.sync import (
     DeviceAuthResponse,
     DeviceEnrollRequest,
     DeviceResponse,
+    DeviceShareRequestCreateRequest,
+    DeviceShareRequestDecisionRequest,
+    DeviceShareRequestResponse,
     DeviceShareResponse,
     DeviceShareUpdateRequest,
     DeviceShareUpsertRequest,
@@ -27,17 +32,22 @@ from app.services.sync_service import (
     apply_sync_batch,
     build_sync_health,
     create_enrollment_token,
+    create_share_request,
     delete_device,
     delete_share,
     enroll_device,
+    get_agent_distribution_root,
     get_authenticated_device,
     get_share_for_device,
     list_devices_with_counts,
+    list_share_requests_for_device,
     list_shares_for_device,
     register_snapshot_start,
+    respond_to_share_request,
     revoke_device,
     serialize_device,
     serialize_share,
+    serialize_share_request,
     serialize_share_with_stats,
     set_share_sync_enabled,
     touch_device_heartbeat,
@@ -45,6 +55,105 @@ from app.services.sync_service import (
 )
 
 router = APIRouter()
+
+SUPPORTED_AGENT_TARGETS = {
+    ("darwin", "amd64"),
+    ("darwin", "arm64"),
+    ("linux", "amd64"),
+    ("linux", "arm64"),
+    ("windows", "amd64"),
+}
+
+
+def _agent_binary_name(target_os: str) -> str:
+    return "localdocs.exe" if target_os == "windows" else "localdocs"
+
+
+def _agent_archive_extension(target_os: str) -> str:
+    return "zip" if target_os == "windows" else "tar.gz"
+
+
+def _agent_archive_name(target_os: str, target_arch: str) -> str:
+    return f"localdocs-{target_os}-{target_arch}.{_agent_archive_extension(target_os)}"
+
+
+def _agent_archive_path(target_os: str, target_arch: str) -> Path:
+    return get_agent_distribution_root() / _agent_archive_name(target_os, target_arch)
+
+
+def _build_install_script(base_url: str) -> str:
+    base_url = base_url.rstrip("/")
+    return f'''#!/usr/bin/env sh
+set -eu
+
+detect_os() {{
+  case "$(uname -s)" in
+    Linux) printf 'linux' ;;
+    Darwin) printf 'darwin' ;;
+    *) printf 'unsupported' ;;
+  esac
+}}
+
+detect_arch() {{
+  case "$(uname -m)" in
+    x86_64|amd64) printf 'amd64' ;;
+    arm64|aarch64) printf 'arm64' ;;
+    *) printf 'unsupported' ;;
+  esac
+}}
+
+OS=$(detect_os)
+ARCH=$(detect_arch)
+
+if [ "$OS" = unsupported ] || [ "$ARCH" = unsupported ]; then
+  printf 'Unsupported platform: %s/%s\n' "$(uname -s)" "$(uname -m)" >&2
+  exit 1
+fi
+
+TMP_DIR=$(mktemp -d)
+cleanup() {{
+  rm -rf "$TMP_DIR"
+}}
+trap cleanup EXIT INT TERM
+
+ARCHIVE_URL="{base_url}/api/v1/sync/agent/downloads/$OS/$ARCH"
+ARCHIVE_PATH="$TMP_DIR/localdocs.tar.gz"
+INSTALL_DIR="${{HOME}}/.local/bin"
+
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "$ARCHIVE_URL" -o "$ARCHIVE_PATH"
+elif command -v wget >/dev/null 2>&1; then
+  wget -qO "$ARCHIVE_PATH" "$ARCHIVE_URL"
+else
+  printf 'curl or wget is required\n' >&2
+  exit 1
+fi
+
+mkdir -p "$TMP_DIR/extract" "$INSTALL_DIR"
+tar -C "$TMP_DIR/extract" -xzf "$ARCHIVE_PATH"
+BINARY_PATH=$(find "$TMP_DIR/extract" -type f -name localdocs | head -n 1)
+
+if [ -z "$BINARY_PATH" ]; then
+  printf 'Archive missing localdocs binary\n' >&2
+  exit 1
+fi
+
+cp "$BINARY_PATH" "$INSTALL_DIR/localdocs"
+chmod 755 "$INSTALL_DIR/localdocs"
+
+printf 'Installed localdocs to %s/localdocs\n' "$INSTALL_DIR"
+
+case ":$PATH:" in
+  *":$INSTALL_DIR:"*)
+    printf 'You can now run: localdocs config\n'
+    ;;
+  *)
+    printf 'If needed, add this to your shell profile:\n'
+    printf '  export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+    printf 'Then run: localdocs config\n'
+    ;;
+esac
+'''
 
 
 def _batch_summary_count(summary: str | None, key: str) -> int:
@@ -56,6 +165,32 @@ def _batch_summary_count(summary: str | None, key: str) -> int:
         return 0
     value = parsed.get(key)
     return value if isinstance(value, int) else 0
+
+
+@router.get("/agent/install.sh", response_class=PlainTextResponse)
+async def get_agent_install_script(request: Request) -> PlainTextResponse:
+    return PlainTextResponse(_build_install_script(str(request.base_url).rstrip("/")))
+
+
+@router.get("/agent/downloads/{target_os}/{target_arch}")
+async def download_agent_archive(target_os: str, target_arch: str) -> FileResponse:
+    normalized_target = (target_os.lower(), target_arch.lower())
+    if normalized_target not in SUPPORTED_AGENT_TARGETS:
+        raise HTTPException(status_code=404, detail="Unsupported agent target")
+
+    archive_path = _agent_archive_path(*normalized_target)
+    if not archive_path.exists() or not archive_path.is_file():
+        archive_name = _agent_archive_name(*normalized_target)
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Agent archive {archive_name} is not available yet. "
+                "Build it with ./scripts/build-agent-dist.sh from the repo root."
+            ),
+        )
+
+    media_type = "application/zip" if normalized_target[0] == "windows" else "application/gzip"
+    return FileResponse(path=archive_path, media_type=media_type, filename=archive_path.name)
 
 
 @router.post(
@@ -91,6 +226,36 @@ async def list_devices(db: AsyncSession = Depends(get_db)) -> list[DeviceRespons
 async def list_device_shares(device_id: str, db: AsyncSession = Depends(get_db)) -> list[DeviceShareResponse]:
     shares = await list_shares_for_device(db, device_id)
     return [await serialize_share_with_stats(db, share) for share in shares]
+
+
+@router.get("/devices/{device_id}/share-requests", response_model=list[DeviceShareRequestResponse])
+async def list_device_share_requests(
+    device_id: str, db: AsyncSession = Depends(get_db)
+) -> list[DeviceShareRequestResponse]:
+    share_requests = await list_share_requests_for_device(db, device_id)
+    return [serialize_share_request(item) for item in share_requests]
+
+
+@router.post(
+    "/devices/{device_id}/share-requests",
+    response_model=DeviceShareRequestResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_device_share_request(
+    device_id: str,
+    data: DeviceShareRequestCreateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> DeviceShareRequestResponse:
+    share_request = await create_share_request(
+        db,
+        device_id=device_id,
+        display_name=data.display_name,
+        source_path=data.source_path,
+        include_globs=data.include_globs,
+        exclude_globs=data.exclude_globs,
+        sync_enabled=data.sync_enabled,
+    )
+    return serialize_share_request(share_request)
 
 
 @router.patch("/devices/{device_id}/shares/{share_id}", response_model=DeviceShareResponse)
@@ -179,10 +344,29 @@ async def agent_config(
     rows = await list_devices_with_counts(db)
     share_count_map = {item.id: share_count for item, share_count in rows}
     shares = await list_shares_for_device(db, device.id)
+    share_requests = await list_share_requests_for_device(db, device.id, pending_only=True)
     return AgentConfigResponse(
         device=serialize_device(device, share_count=share_count_map.get(device.id, 0)),
         shares=[serialize_share(share) for share in shares],
+        share_requests=[serialize_share_request(item) for item in share_requests],
     )
+
+
+@router.post("/agents/share-requests/{request_id}/decision", response_model=DeviceShareRequestResponse)
+async def agent_share_request_decision(
+    request_id: str,
+    data: DeviceShareRequestDecisionRequest,
+    db: AsyncSession = Depends(get_db),
+    device: Device = Depends(get_authenticated_device),
+) -> DeviceShareRequestResponse:
+    share_request, _ = await respond_to_share_request(
+        db,
+        device=device,
+        request_id=request_id,
+        approve=data.approve,
+        response_message=data.response_message,
+    )
+    return serialize_share_request(share_request)
 
 
 @router.post("/agents/shares/upsert", response_model=DeviceShareResponse)
