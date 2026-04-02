@@ -1,63 +1,67 @@
 # LocalDocs Hub
 
-Your markdown files live everywhere — project folders, laptops, servers, VMs. LocalDocs Hub indexes, searches, and manages all of them from one place, without moving a single file.
+LocalDocs Hub brings scattered markdown files under one operational workspace. It indexes, searches, versions, and manages markdown that already lives across project folders, laptops, servers, and VMs, without relocating the source files.
 
-Built with **Next.js 15 · FastAPI · PostgreSQL · SQLAlchemy 2 · Go CLI**
-
----
+**Stack:** Next.js 15, FastAPI, PostgreSQL, SQLAlchemy 2, Go CLI
 
 ## What it does
 
-- **Unified search** across every markdown file on every connected device
-- **Local-first storage** — files stay exactly where they are, never relocated
-- **Simple device pairing** via the `localdocs` CLI
-- **Document versioning and recovery** with per-file history
-- **Read-only mirrored remote shares** — central visibility without central ownership
-- **Operational control plane** for indexing, sync, rebuilds, and diagnostics
-
----
+- Unified search across markdown files on connected devices
+- Local-first storage with source files left in place
+- Simple device pairing through the `localdocs` CLI
+- Per-document versioning and recovery
+- Read-only mirrored remote shares for central visibility
+- Operational controls for indexing, sync, rebuilds, and diagnostics
 
 ## Quick start
 
-### 1. Start the stack
+### Start the stack
 
 ```bash
 docker compose up -d
 ```
 
-| Service      | URL                            |
-|--------------|--------------------------------|
-| Frontend     | http://localhost:4321          |
-| Backend API  | http://localhost:4320          |
-| API docs     | http://localhost:4320/docs     |
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:4321 |
+| Backend API | http://localhost:4320 |
+| API docs | http://localhost:4320/docs |
 
-### 2. Build CLI distributions
+### Build CLI distributions
 
 ```bash
 ./scripts/build-agent-dist.sh
 ```
 
-Outputs to `backend/public/agent/` for macOS (amd64/arm64), Linux (amd64/arm64), and Windows (amd64).
+Artifacts are written to `backend/public/agent/` for:
 
-### 3. Install the CLI on a remote device
+- macOS amd64
+- macOS arm64
+- Linux amd64
+- Linux arm64
+- Windows amd64
+
+### Install the CLI on a remote device
+
+macOS and Linux:
 
 ```bash
-# macOS / Linux
 curl -fsSL http://YOUR_SERVER_HOST:4320/api/v1/sync/agent/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Windows: extract `localdocs.exe` from `backend/public/agent/` and run from PowerShell.
+Windows:
 
-### 4. Pair a device
+- extract `localdocs.exe` from `backend/public/agent/`
+- run it from PowerShell or Command Prompt
 
-Generate a pairing token in the Devices page, then:
+### Pair a device
+
+Generate a pairing token in the Devices page, then run:
 
 ```bash
 localdocs pair --server http://YOUR_SERVER_HOST:4320 --token YOUR_TOKEN
 ```
-
----
 
 ## CLI reference
 
@@ -72,40 +76,35 @@ localdocs sync
 localdocs run --interval-seconds 30
 ```
 
----
-
 ## Architecture
 
-```
+```text
 Central node                     Remote devices
 ────────────────────             ──────────────────────
 Next.js frontend          ←───   localdocs CLI
 FastAPI backend                    pairing
-PostgreSQL (metadata,              folder scan + hashing
-  index, versions)                 batched sync
-search · device registry           heartbeat
-sync coordination
+PostgreSQL                         folder scan + hashing
+metadata, index, versions          batched sync
+search and sync coordination       heartbeat
 ```
 
 Source files remain on the originating device. The central node keeps read-only mirrored copies for indexing and browsing.
 
----
+## Why this project exists
 
-## Why LocalDocs Hub exists
+File transport and document operations are different problems.
 
-Transport tools like Syncthing move files reliably. Git handles versioning within a repo. Neither gives you centralized search, per-file recovery, device governance, or an operational view across everything at once.
+Tools like Syncthing move files reliably. Git versions files inside a repository. Neither provides centralized search, per-file recovery, device governance, or an operational view across markdown that spans many machines and many folders.
 
-LocalDocs Hub is built for markdown workflows that span real project folders across real machines — where a single vault model creates friction, and file ownership actually matters.
-
----
+LocalDocs Hub addresses that gap with a central control plane and a thin device CLI. The goal is straightforward: keep markdown files where they belong, while making the overall system searchable, recoverable, and manageable.
 
 ## Status
 
-**Alpha.** Core direction is stable. Active work is focused on multi-device workflows, diagnostics, packaging, and sync hardening.
-
----
+LocalDocs Hub is in alpha. The architecture and direction are stable. Current work is focused on multi-device workflows, diagnostics, packaging, and sync hardening.
 
 ## Contributing
+
+Contributions are welcome.
 
 1. Read the project docs in `docs/`
 2. Open an issue or discussion for larger changes
@@ -113,8 +112,6 @@ LocalDocs Hub is built for markdown workflows that span real project folders acr
 4. Run tests, lint, and type checks before submitting
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`RELEASING.md`](RELEASING.md).
-
----
 
 ## License
 
