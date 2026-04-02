@@ -18,8 +18,8 @@ LocalDocs Hub brings scattered markdown files under one operational workspace. I
 ### Get the code
 
 ```bash
-git clone https://github.com/krishna-tb/localdocs-hub.git
-cd localdocs-hub
+git clone https://github.com/krishna-vinci/localdoc.git
+cd localdoc
 ```
 
 ### Configuration
