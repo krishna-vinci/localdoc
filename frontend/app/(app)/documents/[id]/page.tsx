@@ -1,8 +1,12 @@
 import { ArrowLeft, FileText } from "lucide-react"
 import Link from "next/link"
 
+import { EmptyState } from "@/components/shared/empty-state"
+import { buttonVariants } from "@/components/ui/button-variants"
 import { getDocument } from "@/lib/api"
+
 import { DocumentWorkspace } from "./document-workspace"
+import { StaleLastReadReset } from "./stale-last-read-reset"
 
 interface PageProps {
   params: Promise<{ id: string }>
@@ -22,18 +26,13 @@ export default async function DocumentPage({ params }: PageProps) {
 
   if (fetchError || !doc) {
     return (
-      <div className="space-y-4">
-        <Link
-          href="/documents"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="size-3.5" />
-          Back to Documents
+      <div className="space-y-6">
+        {fetchError === "Document not found" ? <StaleLastReadReset documentId={id} /> : null}
+        <Link href="/documents" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+          <ArrowLeft className="size-4" />
+          Back to documents
         </Link>
-        <div className="rounded-xl border border-dashed border-border py-16 text-center text-muted-foreground">
-          <FileText className="mx-auto mb-3 size-8 opacity-40" />
-          <p className="text-sm">{fetchError ?? "Document not found"}</p>
-        </div>
+        <EmptyState icon={FileText} title={fetchError ?? "Document not found"} description="Return to the library and pick another file." />
       </div>
     )
   }

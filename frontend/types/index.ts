@@ -183,6 +183,8 @@ export interface DocumentFilters {
   tag?: string
   status?: string
   orphaned?: boolean
+  limit?: number
+  skip?: number
 }
 
 export interface BackgroundJob {
