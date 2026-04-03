@@ -207,8 +207,12 @@ export async function getDuplicateDocuments(limit = 20): Promise<DocumentListIte
 
 // --- Search ---
 
-export async function searchDocuments(query: string, filters: DocumentFilters = {}): Promise<SearchResult[]> {
-  return apiFetch<SearchResult[]>(`/api/v1/search/${toQueryString({ q: query, ...filters })}`)
+export async function searchDocuments(
+  query: string,
+  filters: DocumentFilters = {},
+  limit?: number
+): Promise<SearchResult[]> {
+  return apiFetch<SearchResult[]>(`/api/v1/search/${toQueryString({ q: query, ...filters, limit })}`)
 }
 
 // --- Stats ---

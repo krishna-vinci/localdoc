@@ -55,3 +55,6 @@ docs/implementation-status.md
 # Local release notes / guides
 RELEASING.md
 RELEASE*.md
+
+# Local agent workspace
+.opencode/

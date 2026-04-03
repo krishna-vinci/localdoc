@@ -1,5 +1,6 @@
 "use client"
 
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
   Check,
@@ -11,11 +12,23 @@ import {
   Trash2,
   Unplug,
 } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useState } from "react"
+import { toast } from "sonner"
 
+import { AppAlert } from "@/components/shared/app-alert"
+import { EmptyState } from "@/components/shared/empty-state"
+import { PageHeader } from "@/components/shared/page-header"
+import {
+  SectionPanel,
+  SectionPanelContent,
+  SectionPanelDescription,
+  SectionPanelHeader,
+  SectionPanelTitle,
+} from "@/components/shared/section-panel"
+import { StatChip } from "@/components/shared/stat-chip"
+import { StatusDot } from "@/components/shared/status-dot"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   createEnrollmentToken,
@@ -29,39 +42,8 @@ import {
   revokeDevice,
   updateDeviceShare,
 } from "@/lib/api"
-import { formatTimestamp } from "@/lib/format"
+import { formatRelativeTime, formatTimestamp, parseTimestamp } from "@/lib/format"
 import type { Device, DeviceShare, DeviceShareRequest, EnrollmentToken, SyncHealth } from "@/types"
-
-function timestampToMs(value: string | null): number | null {
-  if (!value) return null
-  const normalizedValue = /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : `${value}Z`
-  const parsed = Date.parse(normalizedValue)
-  return Number.isNaN(parsed) ? null : parsed
-}
-
-async function copyText(value: string): Promise<void> {
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value)
-    return
-  }
-
-  if (typeof document === "undefined") {
-    throw new Error("Clipboard is not available in this environment")
-  }
-
-  const textarea = document.createElement("textarea")
-  textarea.value = value
-  textarea.setAttribute("readonly", "")
-  textarea.style.position = "fixed"
-  textarea.style.opacity = "0"
-  document.body.appendChild(textarea)
-  textarea.select()
-  const copied = document.execCommand("copy")
-  document.body.removeChild(textarea)
-  if (!copied) {
-    throw new Error("Copy failed")
-  }
-}
 
 function normalizePairingServerUrl(value: string): string {
   const trimmed = value.trim()
@@ -74,6 +56,27 @@ function normalizePairingServerUrl(value: string): string {
   }
 
   return /:\d+$/.test(trimmed) ? `http://${trimmed}` : `http://${trimmed}:4320`
+}
+
+async function copyText(value: string) {
+  await navigator.clipboard.writeText(value)
+}
+
+async function loadDevicesData() {
+  const devices = await getDevices()
+  const [syncHealth, sharesEntries, requestEntries] = await Promise.all([
+    getSyncHealth(),
+    Promise.all(devices.map(async (device) => [device.id, await getDeviceShares(device.id)] as const)),
+    Promise.all(devices.map(async (device) => [device.id, await getDeviceShareRequests(device.id)] as const)),
+  ])
+
+  return {
+    devices,
+    syncHealth,
+    sharesByDevice: Object.fromEntries(sharesEntries),
+    shareRequestsByDevice: Object.fromEntries(requestEntries),
+    refreshedAt: new Date().toISOString(),
+  }
 }
 
 export function DeviceManagement({
@@ -89,126 +92,130 @@ export function DeviceManagement({
   initialShareRequestsByDevice: Record<string, DeviceShareRequest[]>
   initialRenderedAt: string
 }) {
-  const [devices, setDevices] = useState(initialDevices)
-  const [sharesByDevice, setSharesByDevice] = useState(initialSharesByDevice)
-  const [shareRequestsByDevice, setShareRequestsByDevice] = useState(initialShareRequestsByDevice)
-  const [syncHealth, setSyncHealth] = useState(initialSyncHealth)
-  const [loading, setLoading] = useState(false)
-  const [creatingToken, setCreatingToken] = useState(false)
+  const queryClient = useQueryClient()
   const [token, setToken] = useState<EnrollmentToken | null>(null)
   const [copiedInstallState, setCopiedInstallState] = useState<"idle" | "copied">("idle")
   const [copiedPairState, setCopiedPairState] = useState<"idle" | "copied">("idle")
-  const [error, setError] = useState<string | null>(null)
-  const [busyKey, setBusyKey] = useState<string | null>(null)
-  const [renderedAtMs, setRenderedAtMs] = useState(() => timestampToMs(initialRenderedAt) ?? Date.now())
-  const [pairingHost, setPairingHost] = useState("")
-  const [requestDrafts, setRequestDrafts] = useState<Record<string, {
-    display_name: string
-    source_path: string
-    include_globs: string
-    exclude_globs: string
-  }>>({})
+  const [pairingHost, setPairingHost] = useState(() =>
+    typeof window === "undefined" ? "" : window.location.hostname
+  )
+  const [requestDrafts, setRequestDrafts] = useState<
+    Record<
+      string,
+      {
+        display_name: string
+        source_path: string
+        include_globs: string
+        exclude_globs: string
+      }
+    >
+  >({})
 
-  useEffect(() => {
-    setRenderedAtMs(Date.now())
-    setPairingHost(window.location.hostname)
-  }, [])
+  const devicesQuery = useQuery({
+    queryKey: ["devices-dashboard"],
+    queryFn: loadDevicesData,
+    initialData: {
+      devices: initialDevices,
+      syncHealth: initialSyncHealth,
+      sharesByDevice: initialSharesByDevice,
+      shareRequestsByDevice: initialShareRequestsByDevice,
+      refreshedAt: initialRenderedAt,
+    },
+    initialDataUpdatedAt: 0,
+  })
 
-  const deviceCountLabel = useMemo(() => `${syncHealth.device_count} total`, [syncHealth.device_count])
-
-  async function refresh() {
-    setLoading(true)
-    setError(null)
-    try {
-      const nextDevices = await getDevices()
-      const [nextSyncHealth, sharesEntries, requestEntries] = await Promise.all([
-        getSyncHealth(),
-        Promise.all(nextDevices.map(async (device) => [device.id, await getDeviceShares(device.id)] as const)),
-        Promise.all(nextDevices.map(async (device) => [device.id, await getDeviceShareRequests(device.id)] as const)),
-      ])
-      setDevices(nextDevices)
-      setSyncHealth(nextSyncHealth)
-      setSharesByDevice(Object.fromEntries(sharesEntries))
-      setShareRequestsByDevice(Object.fromEntries(requestEntries))
-      setRenderedAtMs(Date.now())
-    } catch (refreshError) {
-      setError(refreshError instanceof Error ? refreshError.message : "Failed to refresh devices")
-    } finally {
-      setLoading(false)
-      setBusyKey(null)
-    }
+  async function invalidateDevices() {
+    await queryClient.invalidateQueries({ queryKey: ["devices-dashboard"] })
   }
 
-  async function handleCreateToken() {
-    setCreatingToken(true)
-    setError(null)
-    try {
-      setToken(await createEnrollmentToken())
+  const revokeMutation = useMutation({
+    mutationFn: revokeDevice,
+    onSuccess: async () => {
+      await invalidateDevices()
+      toast.success("Device revoked")
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to revoke device"),
+  })
+
+  const deleteDeviceMutation = useMutation({
+    mutationFn: deleteDevice,
+    onSuccess: async () => {
+      await invalidateDevices()
+      toast.success("Device deleted")
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to delete device"),
+  })
+
+  const toggleShareMutation = useMutation({
+    mutationFn: ({ deviceId, shareId, syncEnabled }: { deviceId: string; shareId: string; syncEnabled: boolean }) =>
+      updateDeviceShare(deviceId, shareId, syncEnabled),
+    onSuccess: async () => {
+      await invalidateDevices()
+      toast.success("Share updated")
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to update share"),
+  })
+
+  const deleteShareMutation = useMutation({
+    mutationFn: ({ deviceId, shareId }: { deviceId: string; shareId: string }) => deleteDeviceShare(deviceId, shareId),
+    onSuccess: async () => {
+      await invalidateDevices()
+      toast.success("Share removed")
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to remove share"),
+  })
+
+  const requestShareMutation = useMutation({
+    mutationFn: ({
+      deviceId,
+      display_name,
+      source_path,
+      include_globs,
+      exclude_globs,
+    }: {
+      deviceId: string
+      display_name: string
+      source_path: string
+      include_globs: string[]
+      exclude_globs: string[]
+    }) =>
+      createDeviceShareRequest(deviceId, {
+        display_name,
+        source_path,
+        include_globs,
+        exclude_globs,
+        sync_enabled: true,
+      }),
+    onSuccess: async (_, variables) => {
+      setRequestDrafts((current) => ({
+        ...current,
+        [variables.deviceId]: { display_name: "", source_path: "", include_globs: "", exclude_globs: "" },
+      }))
+      await invalidateDevices()
+      toast.success("Share request created")
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to create share request"),
+  })
+
+  const createTokenMutation = useMutation({
+    mutationFn: createEnrollmentToken,
+    onSuccess: (createdToken) => {
+      setToken(createdToken)
       setCopiedPairState("idle")
-    } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "Failed to create token")
-    } finally {
-      setCreatingToken(false)
-    }
-  }
+      toast.success("Pairing token created")
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to create token"),
+  })
 
-  async function handleRevoke(deviceId: string) {
-    const confirmed = window.confirm("Revoke this device? It will no longer be able to sync.")
-    if (!confirmed) return
-    setBusyKey(`revoke:${deviceId}`)
-    setError(null)
-    try {
-      await revokeDevice(deviceId)
-      await refresh()
-    } catch (revokeError) {
-      setError(revokeError instanceof Error ? revokeError.message : "Failed to revoke device")
-      setBusyKey(null)
-    }
-  }
+  const pairingServerUrl = normalizePairingServerUrl(pairingHost)
+  const installCommand = `curl -fsSL ${pairingServerUrl}/api/v1/sync/agent/install.sh | sh`
+  const pairingCommand = token ? `localdocs pair --server ${pairingServerUrl} --token ${token.token}` : null
 
-  async function handleDeleteDevice(device: Device) {
-    const confirmed = window.confirm(
-      `Delete device \"${device.display_name}\"? This removes all mirrored shares, replicated files, and indexed remote documents for it.`
-    )
-    if (!confirmed) return
-    setBusyKey(`delete-device:${device.id}`)
-    setError(null)
-    try {
-      await deleteDevice(device.id)
-      await refresh()
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete device")
-      setBusyKey(null)
-    }
-  }
-
-  async function handleToggleShare(deviceId: string, share: DeviceShare) {
-    setBusyKey(`share:${share.id}`)
-    setError(null)
-    try {
-      await updateDeviceShare(deviceId, share.id, !share.sync_enabled)
-      await refresh()
-    } catch (shareError) {
-      setError(shareError instanceof Error ? shareError.message : "Failed to update share")
-      setBusyKey(null)
-    }
-  }
-
-  async function handleRemoveShare(deviceId: string, share: DeviceShare) {
-    const confirmed = window.confirm(
-      `Remove share \"${share.display_name}\"? Mirrored files and indexed documents on this node will be deleted.`
-    )
-    if (!confirmed) return
-    setBusyKey(`share-remove:${share.id}`)
-    setError(null)
-    try {
-      await deleteDeviceShare(deviceId, share.id)
-      await refresh()
-    } catch (shareError) {
-      setError(shareError instanceof Error ? shareError.message : "Failed to remove share")
-      setBusyKey(null)
-    }
-  }
+  const devices = devicesQuery.data.devices
+  const syncHealth = devicesQuery.data.syncHealth
+  const sharesByDevice = devicesQuery.data.sharesByDevice
+  const shareRequestsByDevice = devicesQuery.data.shareRequestsByDevice
+  const refreshedAt = parseTimestamp(devicesQuery.data.refreshedAt)
 
   function updateRequestDraft(
     deviceId: string,
@@ -227,387 +234,372 @@ export function DeviceManagement({
     }))
   }
 
-  async function handleCreateShareRequest(deviceId: string) {
-    const draft = requestDrafts[deviceId]
-    if (!draft?.display_name?.trim() || !draft?.source_path?.trim()) {
-      setError("Share name and source path are required")
-      return
-    }
-
-    setBusyKey(`create-request:${deviceId}`)
-    setError(null)
-    try {
-      await createDeviceShareRequest(deviceId, {
-        display_name: draft.display_name.trim(),
-        source_path: draft.source_path.trim(),
-        include_globs: draft.include_globs.split(",").map((item) => item.trim()).filter(Boolean),
-        exclude_globs: draft.exclude_globs.split(",").map((item) => item.trim()).filter(Boolean),
-        sync_enabled: true,
-      })
-      setRequestDrafts((current) => ({
-        ...current,
-        [deviceId]: { display_name: "", source_path: "", include_globs: "", exclude_globs: "" },
-      }))
-      await refresh()
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Failed to create share request")
-      setBusyKey(null)
-    }
-  }
-
-  async function handleCopyInstallCommand() {
-    setError(null)
-    try {
-      await copyText(installCommand)
-      setCopiedInstallState("copied")
-    } catch (copyError) {
-      setError(copyError instanceof Error ? copyError.message : "Failed to copy install command")
-    }
-  }
-
-  async function handleCopyPairCommand() {
-    if (!pairingCommand) return
-    setError(null)
-    try {
-      await copyText(pairingCommand)
-      setCopiedPairState("copied")
-    } catch (copyError) {
-      setError(copyError instanceof Error ? copyError.message : "Failed to copy pairing command")
-    }
-  }
-
-  const pairingServerUrl = normalizePairingServerUrl(pairingHost)
-  const installCommand = `curl -fsSL ${pairingServerUrl}/api/v1/sync/agent/install.sh | sh`
-  const pairingCommand = token ? `localdocs pair --server ${pairingServerUrl} --token ${token.token}` : null
-
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Devices</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Pair lightweight local agents, manage mirrored shares, and inspect recent sync failures.
-          </p>
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Button variant="outline" onClick={() => void refresh()} disabled={loading}>
-            {loading ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <RefreshCw className="mr-1.5 size-4" />}
-            Refresh
-          </Button>
-          <Button onClick={() => void handleCreateToken()} disabled={creatingToken}>
-            {creatingToken ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <ShieldCheck className="mr-1.5 size-4" />}
-            Create pairing token
-          </Button>
-        </div>
-      </div>
-
-      {error && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {error}
-        </div>
-      )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Self-hosted agent install</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-2">
-            <label className="block space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">Central host / IP</span>
-              <Input
-                value={pairingHost}
-                onChange={(event) => setPairingHost(event.target.value)}
-                  placeholder="your-server-host"
-              />
-            </label>
-            <p className="text-xs text-muted-foreground">
-              Use the IP or DNS name that the remote MacBook or Linux device can actually reach.
-            </p>
-          </div>
-          <code className="block overflow-x-auto rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
-            {installCommand}
-          </code>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Sync"
+        title="Devices"
+        description="Pair agents, request shared folders from remote devices, and keep a clear view of what is mirrored into this hub."
+        action={
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => void handleCopyInstallCommand()}>
-              {copiedInstallState === "copied" ? <Check className="mr-1.5 size-4" /> : <Copy className="mr-1.5 size-4" />}
-              {copiedInstallState === "copied" ? "Copied install" : "Copy install command"}
+            <Button variant="outline" onClick={() => devicesQuery.refetch()} disabled={devicesQuery.isFetching}>
+              {devicesQuery.isFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              Refresh
+            </Button>
+            <Button onClick={() => createTokenMutation.mutate(undefined)} disabled={createTokenMutation.isPending}>
+              {createTokenMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+              Create pairing token
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            First run <code>./scripts/build-agent-dist.sh</code> on the server to publish macOS, Linux, and Windows archives for self-hosted downloads.
-          </p>
-        </CardContent>
-      </Card>
+        }
+      />
 
-      {token && pairingCommand && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Latest enrollment token</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">After install, pair the device once, then use <code>localdocs pending</code> to review any requested shares.</p>
-            <code className="block overflow-x-auto rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
-              {pairingCommand}
-            </code>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <code className="block overflow-x-auto rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">{token.token}</code>
-              <Button variant="outline" onClick={() => void handleCopyPairCommand()}>
-                {copiedPairState === "copied" ? <Check className="mr-1.5 size-4" /> : <Copy className="mr-1.5 size-4" />}
-                {copiedPairState === "copied" ? "Copied pair command" : "Copy pair command"}
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">Expires {formatTimestamp(token.expires_at)}</p>
-          </CardContent>
-        </Card>
-      )}
+      {devicesQuery.isError ? (
+        <AppAlert variant="error">{devicesQuery.error instanceof Error ? devicesQuery.error.message : "Failed to load devices"}</AppAlert>
+      ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <Card><CardContent className="px-5 py-4"><p className="text-sm text-muted-foreground">Devices</p><p className="mt-1 text-2xl font-bold">{syncHealth.device_count}</p><p className="text-xs text-muted-foreground">{deviceCountLabel}</p></CardContent></Card>
-        <Card><CardContent className="px-5 py-4"><p className="text-sm text-muted-foreground">Approved</p><p className="mt-1 text-2xl font-bold">{syncHealth.approved_device_count}</p></CardContent></Card>
-        <Card><CardContent className="px-5 py-4"><p className="text-sm text-muted-foreground">Stale</p><p className="mt-1 text-2xl font-bold">{syncHealth.stale_device_count}</p></CardContent></Card>
-        <Card><CardContent className="px-5 py-4"><p className="text-sm text-muted-foreground">Mirrored shares</p><p className="mt-1 text-2xl font-bold">{syncHealth.share_count}</p></CardContent></Card>
-        <Card><CardContent className="px-5 py-4"><p className="text-sm text-muted-foreground">Failed batches</p><p className="mt-1 text-2xl font-bold">{syncHealth.failed_batch_count}</p></CardContent></Card>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <StatChip label="Devices" value={syncHealth.device_count} icon={Smartphone} />
+        <StatChip label="Approved" value={syncHealth.approved_device_count} icon={Smartphone} />
+        <StatChip label="Stale" value={syncHealth.stale_device_count} icon={AlertTriangle} />
+        <StatChip label="Shares" value={syncHealth.share_count} icon={Copy} />
+        <StatChip label="Failed batches" value={syncHealth.failed_batch_count} icon={AlertTriangle} />
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Recent sync failures</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {syncHealth.recent_failures.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No recent sync failures.</p>
-          ) : (
-            <div className="space-y-3">
-              {syncHealth.recent_failures.map((failure) => (
-                <div key={failure.id} className="rounded-lg border border-border p-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="destructive">{failure.batch_kind}</Badge>
-                    <p className="text-sm font-medium">{failure.device_name ?? "Unknown device"}</p>
-                    {failure.share_name && <span className="text-xs text-muted-foreground">· {failure.share_name}</span>}
-                  </div>
-                  {failure.error && (
-                    <p className="mt-2 text-sm text-destructive">{failure.error}</p>
-                  )}
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {failure.source_path ?? "Unknown path"} · {failure.received_at ? formatTimestamp(failure.received_at) : "time unavailable"}
-                  </p>
-                </div>
-              ))}
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+        <SectionPanel>
+          <SectionPanelHeader>
+            <SectionPanelTitle>Install and pair</SectionPanelTitle>
+            <SectionPanelDescription>Use a reachable host or IP, install the agent, and then pair it once with a fresh enrollment token.</SectionPanelDescription>
+          </SectionPanelHeader>
+          <SectionPanelContent className="space-y-4">
+            <label className="space-y-2">
+              <span className="text-sm font-medium">Central host / IP</span>
+              <Input value={pairingHost} onChange={(event) => setPairingHost(event.target.value)} placeholder="your-server-host" />
+            </label>
+
+            <div className="rounded-[1.25rem] border border-border/70 bg-muted/35 p-4">
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Install command</p>
+              <code className="mt-2 block overflow-x-auto text-sm leading-6 text-foreground">{installCommand}</code>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    await copyText(installCommand)
+                    setCopiedInstallState("copied")
+                    toast.success("Install command copied")
+                  }}
+                >
+                  {copiedInstallState === "copied" ? <Check className="size-4" /> : <Copy className="size-4" />}
+                  {copiedInstallState === "copied" ? "Copied" : "Copy install command"}
+                </Button>
+              </div>
             </div>
-          )}
-        </CardContent>
-      </Card>
 
-      {devices.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border py-16 text-center text-muted-foreground">
-          <Smartphone className="mx-auto mb-3 size-8 opacity-40" />
-          <p className="text-sm">No paired devices yet.</p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {devices.map((device) => {
-            const shares = sharesByDevice[device.id] ?? []
-            const shareRequests = shareRequestsByDevice[device.id] ?? []
-            const requestDraft = requestDrafts[device.id] ?? {
-              display_name: "",
-              source_path: "",
-              include_globs: "",
-              exclude_globs: "",
-            }
-            const lastSeenMs = timestampToMs(device.last_seen_at)
-            const stale = lastSeenMs === null || renderedAtMs-lastSeenMs > 5 * 60 * 1000
-            return (
-              <Card key={device.id}>
-                <CardContent className="space-y-4 px-5 py-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-medium">{device.display_name}</p>
-                        <Badge variant={device.status === "revoked" ? "destructive" : stale ? "secondary" : "outline"}>
-                          {device.status === "revoked" ? "revoked" : stale ? "stale" : "approved"}
-                        </Badge>
-                        {device.platform && <Badge variant="outline">{device.platform}</Badge>}
-                      </div>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {device.hostname ?? "Unknown host"} · {device.agent_version ?? "agent version unknown"}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Last seen {device.last_seen_at ? formatTimestamp(device.last_seen_at) : "never"}
-                      </p>
+            {token && pairingCommand ? (
+              <div className="rounded-[1.25rem] border border-border/70 bg-background/80 p-4">
+                <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Latest pairing command</p>
+                <code className="mt-2 block overflow-x-auto text-sm leading-6 text-foreground">{pairingCommand}</code>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={async () => {
+                      await copyText(pairingCommand)
+                      setCopiedPairState("copied")
+                      toast.success("Pair command copied")
+                    }}
+                  >
+                    {copiedPairState === "copied" ? <Check className="size-4" /> : <Copy className="size-4" />}
+                    {copiedPairState === "copied" ? "Copied" : "Copy pair command"}
+                  </Button>
+                  <Badge variant="outline">Expires {formatTimestamp(token.expires_at)}</Badge>
+                </div>
+              </div>
+            ) : null}
+          </SectionPanelContent>
+        </SectionPanel>
+
+        <SectionPanel>
+          <SectionPanelHeader>
+            <SectionPanelTitle>Recent sync failures</SectionPanelTitle>
+            <SectionPanelDescription>Failures are grouped here so device cards can stay readable until something actually needs attention.</SectionPanelDescription>
+          </SectionPanelHeader>
+          <SectionPanelContent>
+            {syncHealth.recent_failures.length === 0 ? (
+              <AppAlert>No recent sync failures.</AppAlert>
+            ) : (
+              <div className="space-y-3">
+                {syncHealth.recent_failures.map((failure) => (
+                  <div key={failure.id} className="rounded-[1.25rem] border border-border/70 bg-background/80 px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="destructive">{failure.batch_kind}</Badge>
+                      <p className="text-sm font-semibold tracking-tight">{failure.device_name ?? "Unknown device"}</p>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() => void handleRevoke(device.id)}
-                        disabled={device.status === "revoked" || busyKey === `revoke:${device.id}` || busyKey === `delete-device:${device.id}`}
-                      >
-                        {busyKey === `revoke:${device.id}` ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <Unplug className="mr-1.5 size-4" />}
-                        Revoke
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => void handleDeleteDevice(device)}
-                        disabled={busyKey === `revoke:${device.id}` || busyKey === `delete-device:${device.id}`}
-                      >
-                        {busyKey === `delete-device:${device.id}` ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <Trash2 className="mr-1.5 size-4" />}
-                        Delete device
-                      </Button>
-                    </div>
+                    {failure.error ? <p className="mt-2 text-sm text-destructive">{failure.error}</p> : null}
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {failure.source_path ?? "Unknown path"} · {failure.received_at ? formatTimestamp(failure.received_at) : "time unavailable"}
+                    </p>
                   </div>
+                ))}
+              </div>
+            )}
+          </SectionPanelContent>
+        </SectionPanel>
+      </div>
 
-                  <div className="space-y-2">
-                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Requested shares</p>
-                    <div className="rounded-lg border border-border p-3 space-y-3">
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">Share name</span>
-                          <Input
-                            value={requestDraft.display_name}
-                            onChange={(event) => updateRequestDraft(device.id, "display_name", event.target.value)}
-                            placeholder="notes"
+      <SectionPanel>
+        <SectionPanelHeader>
+          <SectionPanelTitle>Paired devices</SectionPanelTitle>
+          <SectionPanelDescription>Each device can expose one or more shares. Keep inactive complexity tucked into each card until you need it.</SectionPanelDescription>
+        </SectionPanelHeader>
+        <SectionPanelContent>
+          {devices.length === 0 ? (
+            <EmptyState icon={Smartphone} title="No paired devices yet" description="Create a token, pair an agent, and it will appear here." />
+          ) : (
+            <div className="space-y-4">
+              {devices.map((device) => {
+                const shares = sharesByDevice[device.id] ?? []
+                const shareRequests = shareRequestsByDevice[device.id] ?? []
+                const requestDraft = requestDrafts[device.id] ?? {
+                  display_name: "",
+                  source_path: "",
+                  include_globs: "",
+                  exclude_globs: "",
+                }
+                const lastSeen = parseTimestamp(device.last_seen_at)
+                const stale = !lastSeen || !refreshedAt || refreshedAt.getTime() - lastSeen.getTime() > 5 * 60 * 1000
+
+                return (
+                  <div key={device.id} className="rounded-[1.5rem] border border-border/70 bg-background/80 px-5 py-5">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-base font-semibold tracking-tight">{device.display_name}</h3>
+                          <StatusDot
+                            tone={device.status === "revoked" ? "danger" : stale ? "warning" : "success"}
+                            label={device.status === "revoked" ? "Revoked" : stale ? "Stale" : "Approved"}
                           />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">Remote source path</span>
-                          <Input
-                            value={requestDraft.source_path}
-                            onChange={(event) => updateRequestDraft(device.id, "source_path", event.target.value)}
-                            placeholder={device.platform === "darwin" ? "/Users/name/Documents/Notes" : "/home/user/notes"}
-                          />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">Include globs</span>
-                          <Input
-                            value={requestDraft.include_globs}
-                            onChange={(event) => updateRequestDraft(device.id, "include_globs", event.target.value)}
-                            placeholder="notes/**/*.md"
-                          />
-                        </label>
-                        <label className="space-y-1">
-                          <span className="text-xs text-muted-foreground">Exclude globs</span>
-                          <Input
-                            value={requestDraft.exclude_globs}
-                            onChange={(event) => updateRequestDraft(device.id, "exclude_globs", event.target.value)}
-                            placeholder="**/drafts/**"
-                          />
-                        </label>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void handleCreateShareRequest(device.id)}
-                          disabled={busyKey === `create-request:${device.id}`}
-                        >
-                          {busyKey === `create-request:${device.id}` ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : null}
-                          Request share on device
-                        </Button>
+                          {device.platform ? <Badge variant="outline">{device.platform}</Badge> : null}
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          {device.hostname ?? "Unknown host"} · {device.agent_version ?? "agent version unknown"}
+                        </p>
                         <p className="text-xs text-muted-foreground">
-                          The device user can review it with <code>localdocs pending</code> and approve it with <code>localdocs approve REQUEST_ID</code>.
+                          Last seen {device.last_seen_at ? formatRelativeTime(device.last_seen_at) : "never"}
                         </p>
                       </div>
-                      {shareRequests.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No share requests yet.</p>
-                      ) : (
-                        <div className="space-y-2">
-                          {shareRequests.map((request) => (
-                            <div key={request.id} className="rounded-md border border-border px-3 py-2">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <p className="text-sm font-medium">{request.display_name}</p>
-                                <Badge variant={request.status === "approved" ? "secondary" : request.status === "denied" ? "destructive" : "outline"}>
-                                  {request.status}
-                                </Badge>
-                              </div>
-                              <p className="mt-1 text-xs text-muted-foreground">{request.source_path}</p>
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                Requested {formatTimestamp(request.requested_at)}
-                                {request.responded_at ? ` · Responded ${formatTimestamp(request.responded_at)}` : ""}
-                              </p>
-                              {request.response_message && (
-                                <p className="mt-1 text-xs text-muted-foreground">{request.response_message}</p>
-                              )}
-                            </div>
-                          ))}
+
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            if (window.confirm("Revoke this device? It will no longer be able to sync.")) {
+                              revokeMutation.mutate(device.id)
+                            }
+                          }}
+                          disabled={device.status === "revoked" || revokeMutation.isPending}
+                        >
+                          {revokeMutation.isPending && revokeMutation.variables === device.id ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Unplug className="size-4" />
+                          )}
+                          Revoke
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                `Delete device “${device.display_name}”? This removes mirrored shares, replicated files, and indexed remote documents for it.`
+                              )
+                            ) {
+                              deleteDeviceMutation.mutate(device.id)
+                            }
+                          }}
+                          disabled={deleteDeviceMutation.isPending}
+                        >
+                          {deleteDeviceMutation.isPending && deleteDeviceMutation.variables === device.id ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-4" />
+                          )}
+                          Delete
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 grid gap-5 xl:grid-cols-2">
+                      <div className="space-y-3 rounded-[1.25rem] border border-border/70 bg-muted/25 p-4">
+                        <div>
+                          <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Request a share</p>
+                          <p className="mt-1 text-sm text-muted-foreground">Ask the remote device to expose a folder. The remote user still approves it locally.</p>
                         </div>
-                      )}
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">Share name</span>
+                            <Input
+                              value={requestDraft.display_name}
+                              onChange={(event) => updateRequestDraft(device.id, "display_name", event.target.value)}
+                              placeholder="notes"
+                            />
+                          </label>
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">Remote source path</span>
+                            <Input
+                              value={requestDraft.source_path}
+                              onChange={(event) => updateRequestDraft(device.id, "source_path", event.target.value)}
+                              placeholder={device.platform === "darwin" ? "/Users/name/Documents/Notes" : "/home/user/notes"}
+                            />
+                          </label>
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">Include globs</span>
+                            <Input
+                              value={requestDraft.include_globs}
+                              onChange={(event) => updateRequestDraft(device.id, "include_globs", event.target.value)}
+                              placeholder="notes/**/*.md"
+                            />
+                          </label>
+                          <label className="space-y-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">Exclude globs</span>
+                            <Input
+                              value={requestDraft.exclude_globs}
+                              onChange={(event) => updateRequestDraft(device.id, "exclude_globs", event.target.value)}
+                              placeholder="**/drafts/**"
+                            />
+                          </label>
+                        </div>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            if (!requestDraft.display_name.trim() || !requestDraft.source_path.trim()) {
+                              toast.error("Share name and source path are required")
+                              return
+                            }
+
+                            requestShareMutation.mutate({
+                              deviceId: device.id,
+                              display_name: requestDraft.display_name.trim(),
+                              source_path: requestDraft.source_path.trim(),
+                              include_globs: requestDraft.include_globs
+                                .split(",")
+                                .map((item) => item.trim())
+                                .filter(Boolean),
+                              exclude_globs: requestDraft.exclude_globs
+                                .split(",")
+                                .map((item) => item.trim())
+                                .filter(Boolean),
+                            })
+                          }}
+                          disabled={requestShareMutation.isPending}
+                        >
+                          {requestShareMutation.isPending && requestShareMutation.variables?.deviceId === device.id ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : null}
+                          Request share on device
+                        </Button>
+
+                        <div className="space-y-2">
+                          {shareRequests.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">No share requests yet.</p>
+                          ) : (
+                            shareRequests.map((request) => (
+                              <div key={request.id} className="rounded-2xl border border-border/70 bg-background/80 px-4 py-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-sm font-medium">{request.display_name}</p>
+                                  <Badge variant={request.status === "approved" ? "secondary" : request.status === "denied" ? "destructive" : "outline"}>
+                                    {request.status}
+                                  </Badge>
+                                </div>
+                                <p className="mt-1 text-xs text-muted-foreground">{request.source_path}</p>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 rounded-[1.25rem] border border-border/70 bg-muted/25 p-4">
+                        <div>
+                          <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Mirrored shares</p>
+                          <p className="mt-1 text-sm text-muted-foreground">Once a share is approved, it appears here with sync state and failure signals.</p>
+                        </div>
+                        {shares.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No shares registered yet.</p>
+                        ) : (
+                          shares.map((share) => (
+                            <div key={share.id} className="rounded-2xl border border-border/70 bg-background/80 px-4 py-3">
+                              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                <div className="space-y-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm font-semibold tracking-tight">{share.display_name}</p>
+                                    <StatusDot tone={share.sync_enabled ? "success" : "neutral"} label={share.sync_enabled ? "Sync enabled" : "Disabled"} />
+                                    {share.failed_batch_count > 0 ? <Badge variant="destructive">{share.failed_batch_count} failures</Badge> : null}
+                                  </div>
+                                  <p className="text-xs text-muted-foreground">Source: {share.source_path}</p>
+                                  <p className="text-xs text-muted-foreground">Replica: {share.storage_path}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Files {share.active_file_count}/{share.file_count} · Last synced {share.last_sync_at ? formatRelativeTime(share.last_sync_at) : "never"}
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      toggleShareMutation.mutate({
+                                        deviceId: device.id,
+                                        shareId: share.id,
+                                        syncEnabled: !share.sync_enabled,
+                                      })
+                                    }
+                                  >
+                                    {toggleShareMutation.isPending &&
+                                    toggleShareMutation.variables?.shareId === share.id ? (
+                                      <Loader2 className="size-4 animate-spin" />
+                                    ) : null}
+                                    {share.sync_enabled ? "Disable sync" : "Enable sync"}
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      if (
+                                        window.confirm(
+                                          `Remove share “${share.display_name}”? Mirrored files and indexed documents on this node will be deleted.`
+                                        )
+                                      ) {
+                                        deleteShareMutation.mutate({ deviceId: device.id, shareId: share.id })
+                                      }
+                                    }}
+                                  >
+                                    {deleteShareMutation.isPending && deleteShareMutation.variables?.shareId === share.id ? (
+                                      <Loader2 className="size-4 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="size-4" />
+                                    )}
+                                    Remove share
+                                  </Button>
+                                </div>
+                              </div>
+
+                              {share.last_error ? (
+                                <AppAlert variant="warning" className="mt-3">
+                                  {share.last_error}
+                                  {share.last_error_at ? ` · ${formatTimestamp(share.last_error_at)}` : ""}
+                                </AppAlert>
+                              ) : null}
+                            </div>
+                          ))
+                        )}
+                      </div>
                     </div>
                   </div>
-
-                  <div className="space-y-2">
-                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Shares</p>
-                    {shares.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No shares registered yet.</p>
-                    ) : (
-                      shares.map((share) => {
-                        const shareBusy = busyKey === `share:${share.id}` || busyKey === `share-remove:${share.id}`
-                        return (
-                          <div key={share.id} className="rounded-lg border border-border p-3">
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                              <div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-sm font-medium">{share.display_name}</p>
-                                  <Badge variant={share.sync_enabled ? "secondary" : "outline"}>
-                                    {share.sync_enabled ? "sync enabled" : "disabled"}
-                                  </Badge>
-                                  {share.last_snapshot_generation && <Badge variant="outline">snapshot {share.last_snapshot_generation}</Badge>}
-                                  {share.failed_batch_count > 0 && (
-                                    <Badge variant="destructive">{share.failed_batch_count} failures</Badge>
-                                  )}
-                                </div>
-                                <p className="mt-1 text-xs text-muted-foreground">Source: {share.source_path}</p>
-                                <p className="text-xs text-muted-foreground">Replica: {share.storage_path}</p>
-                                <p className="mt-1 text-xs text-muted-foreground">
-                                  Files {share.active_file_count}/{share.file_count} · Last synced {share.last_sync_at ? formatTimestamp(share.last_sync_at) : "never"}
-                                </p>
-                                {share.last_error && (
-                                  <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                                    <div className="flex items-start gap-2">
-                                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                                      <div>
-                                        <p>{share.last_error}</p>
-                                        {share.last_error_at && (
-                                          <p className="mt-1 text-[11px] text-destructive/80">
-                                            Last failure {formatTimestamp(share.last_error_at)}
-                                          </p>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => void handleToggleShare(device.id, share)}
-                                  disabled={shareBusy}
-                                >
-                                  {busyKey === `share:${share.id}` ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : null}
-                                  {share.sync_enabled ? "Disable sync" : "Enable sync"}
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => void handleRemoveShare(device.id, share)}
-                                  disabled={shareBusy}
-                                >
-                                  {busyKey === `share-remove:${share.id}` ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <Trash2 className="mr-1.5 size-4" />}
-                                  Remove share
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            )
-          })}
-        </div>
-      )}
+                )
+              })}
+            </div>
+          )}
+        </SectionPanelContent>
+      </SectionPanel>
     </div>
   )
 }
