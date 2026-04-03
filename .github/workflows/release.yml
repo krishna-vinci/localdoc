@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build release assets
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v$(tr -d '\n' < VERSION)"
+          fi
+
+          VERSION="${TAG#v}"
+          FILE_VERSION="$(tr -d '\n' < VERSION)"
+
+          if [[ "$VERSION" != "$FILE_VERSION" ]]; then
+            echo "Tag version $VERSION does not match VERSION file $FILE_VERSION" >&2
+            exit 1
+          fi
+
+          python3 scripts/set-version.py --check
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build agent archives
+        env:
+          LOCALDOCS_AGENT_OUTPUT_DIR: ${{ runner.temp }}/agent-dist
+          LOCALDOCS_AGENT_VERSION: ${{ steps.version.outputs.version }}
+        run: sh ./scripts/build-agent-dist.sh
+
+      - name: Generate release checksums
+        working-directory: ${{ runner.temp }}/agent-dist
+        shell: bash
+        run: |
+          sha256sum *.tar.gz *.zip > checksums.txt
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: |
+            ${{ runner.temp }}/agent-dist/*.tar.gz
+            ${{ runner.temp }}/agent-dist/*.zip
+            ${{ runner.temp }}/agent-dist/checksums.txt
+            scripts/install-localdocs-agent.sh

@@ -29,6 +29,8 @@ You can still build a single target if you want:
 ./scripts/build-agent-dist.sh linux arm64
 ```
 
+If you publish GitHub Releases for this repository, the same agent archives are also attached to each tagged release as downloadable assets.
+
 ### 2. Install directly from your self-hosted server
 
 Once those archives exist, the backend serves them automatically.
