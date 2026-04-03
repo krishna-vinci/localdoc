@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-var agentVersion = "0.1.0-alpha.1"
+var agentVersion = "0.2.0"
 
 type Config struct {
 	ServerURL   string       `json:"server_url"`
