@@ -7,7 +7,6 @@ import {
   ChevronRight,
   FileText,
   Layers3,
-  Search,
   Settings2,
   Sparkles,
 } from "lucide-react"
@@ -29,7 +28,6 @@ interface AppSidebarProps {
   mobile?: boolean
   onNavigate?: () => void
   onToggle?: () => void
-  onOpenSearch?: () => void
 }
 
 interface ProjectTreeGroup {
@@ -140,7 +138,6 @@ export function AppSidebar({
   mobile = false,
   onNavigate,
   onToggle,
-  onOpenSearch,
 }: AppSidebarProps) {
   const pathname = usePathname()
   const compact = collapsed && !mobile
@@ -171,6 +168,8 @@ export function AppSidebar({
     [documentsQuery.data, foldersQuery.data, projectsQuery.data]
   )
   const currentDocumentId = pathname.startsWith("/documents/") ? pathname.replace("/documents/", "") : null
+  const recentDocuments = readerState.recent.slice(0, 5)
+  const pinnedDocuments = readerState.pinned.slice(0, 5)
 
   function toggleProject(key: string) {
     setExpandedProjects((current) => ({ ...current, [key]: !current[key] }))
@@ -183,7 +182,7 @@ export function AppSidebar({
   return (
     <aside
       className={cn(
-        "flex h-full shrink-0 flex-col border-r border-sidebar-border/80 bg-sidebar/95 backdrop-blur transition-[width] duration-200",
+        "flex h-full min-h-0 shrink-0 flex-col border-r border-sidebar-border/80 bg-sidebar/95 backdrop-blur transition-[width] duration-200",
         compact ? "w-[5.5rem]" : "w-[21rem]",
         mobile && "h-dvh w-full"
       )}
@@ -218,38 +217,19 @@ export function AppSidebar({
         )}
       </div>
 
-      <div className={cn("space-y-3 border-b border-sidebar-border/70 px-3 py-4", compact && "px-2")}>
+      <div className={cn("border-b border-sidebar-border/70 px-3 py-4", compact && "px-2")}>
         {!compact ? <StatusDot tone="success" label="Reading library ready" /> : <div className="flex justify-center"><span className="size-2 rounded-full bg-emerald-500" /></div>}
-        <button
-          type="button"
-          onClick={onOpenSearch}
-          className={cn(
-            "flex w-full items-center rounded-2xl border border-sidebar-border/70 bg-background/55 text-left text-sidebar-foreground/80 transition-colors hover:bg-background/80",
-            compact ? "justify-center px-2 py-3" : "gap-3 px-3 py-3"
-          )}
-        >
-          <Search className="size-4 shrink-0" />
-          {!compact ? (
-            <>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">Search your library</span>
-                <span className="block truncate text-xs text-sidebar-foreground/55">Jump with ⌘K</span>
-              </span>
-              <span className="rounded-md border border-sidebar-border/70 px-1.5 py-0.5 text-[10px] font-medium text-sidebar-foreground/60">⌘K</span>
-            </>
-          ) : null}
-        </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
         <div className="space-y-5">
           <section className="space-y-2">
             {!compact ? <p className="px-3 text-xs font-medium uppercase tracking-[0.16em] text-sidebar-foreground/50">Recent</p> : null}
             <div className="space-y-1">
-              {readerState.recent.length === 0 ? (
+              {recentDocuments.length === 0 ? (
                 !compact ? <p className="px-3 text-xs text-sidebar-foreground/45">Open a note to build your trail.</p> : null
               ) : (
-                readerState.recent.map((document) => (
+                recentDocuments.map((document) => (
                   <SidebarDocLink
                     key={document.id}
                     href={`/documents/${document.id}`}
@@ -267,10 +247,10 @@ export function AppSidebar({
           <section className="space-y-2">
             {!compact ? <p className="px-3 text-xs font-medium uppercase tracking-[0.16em] text-sidebar-foreground/50">Pinned</p> : null}
             <div className="space-y-1">
-              {readerState.pinned.length === 0 ? (
+              {pinnedDocuments.length === 0 ? (
                 !compact ? <p className="px-3 text-xs text-sidebar-foreground/45">Pin notes you revisit often.</p> : null
               ) : (
-                readerState.pinned.map((document) => (
+                pinnedDocuments.map((document) => (
                   <SidebarDocLink
                     key={document.id}
                     href={`/documents/${document.id}`}

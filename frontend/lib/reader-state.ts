@@ -5,6 +5,7 @@ import { useSyncExternalStore } from "react"
 const STORAGE_KEY = "localdocs.reader-state"
 const STORAGE_EVENT = "localdocs-reader-state-change"
 const MAX_RECENT_ITEMS = 12
+const MAX_PINNED_ITEMS = 20
 
 export interface ReaderDocumentSnapshot {
   id: string
@@ -158,7 +159,7 @@ export function togglePinnedDocument(document: {
     ...state,
     pinned: exists
       ? state.pinned.filter((item) => item.id !== snapshot.id)
-      : replaceOrPrepend(state.pinned, snapshot),
+      : replaceOrPrepend(state.pinned, snapshot, MAX_PINNED_ITEMS),
   })
 }
 
