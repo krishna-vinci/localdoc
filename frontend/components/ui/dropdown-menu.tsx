@@ -12,7 +12,7 @@ function DropdownMenuTrigger(props: MenuPrimitive.Trigger.Props) {
   return <MenuPrimitive.Trigger {...props} />
 }
 
-function DropdownMenuContent({ className, ...props }: MenuPrimitive.Positioner.Props & { className?: string }) {
+function DropdownMenuContent({ className, children, ...props }: MenuPrimitive.Positioner.Props & { className?: string; children?: React.ReactNode }) {
   return (
     <MenuPrimitive.Portal>
       <MenuPrimitive.Positioner sideOffset={6} {...props}>
@@ -24,7 +24,9 @@ function DropdownMenuContent({ className, ...props }: MenuPrimitive.Positioner.P
             "transition-[opacity,transform] duration-150",
             className
           )}
-        />
+        >
+          {children}
+        </MenuPrimitive.Popup>
       </MenuPrimitive.Positioner>
     </MenuPrimitive.Portal>
   )

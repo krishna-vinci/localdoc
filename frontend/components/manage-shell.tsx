@@ -46,32 +46,20 @@ export function ManageShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-transparent">
-      <div className="hidden md:flex">
-        <ManageSidebar
-          collapsed={desktopCollapsed}
-          onToggle={toggleDesktopSidebar}
-          onOpenSearch={() => setCommandOpen(true)}
-        />
+    <div className="flex h-dvh overflow-hidden bg-transparent">
+      <div className="hidden min-h-0 md:flex">
+        <ManageSidebar collapsed={desktopCollapsed} onToggle={toggleDesktopSidebar} />
       </div>
 
       <Dialog open={mobileOpen} onOpenChange={setMobileOpen}>
         <DialogContent className="left-0 top-0 h-dvh w-[20rem] max-w-[88vw] translate-x-0 translate-y-0 rounded-none border-y-0 border-l-0 p-0">
-          <ManageSidebar
-            mobile
-            onNavigate={() => setMobileOpen(false)}
-            onToggle={() => setMobileOpen(false)}
-            onOpenSearch={() => {
-              setMobileOpen(false)
-              setCommandOpen(true)
-            }}
-          />
+          <ManageSidebar mobile onNavigate={() => setMobileOpen(false)} onToggle={() => setMobileOpen(false)} />
         </DialogContent>
       </Dialog>
 
       <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
 
-      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-30 border-b border-border/70 bg-background/88 backdrop-blur-xl">
           <PageContainer className="gap-0 px-4 sm:px-6">
             <div className="flex h-16 items-center justify-between gap-4">
@@ -99,7 +87,7 @@ export function ManageShell({ children }: { children: React.ReactNode }) {
           </PageContainer>
         </header>
 
-        <main className="flex-1 px-4 py-6 sm:px-6 sm:py-8">
+        <main className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8">
           <PageContainer>{children}</PageContainer>
         </main>
       </div>

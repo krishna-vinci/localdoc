@@ -10,23 +10,28 @@ import {
   Link2,
   ListChecks,
   Loader2,
+  MoreHorizontal,
   PanelRight,
   PencilLine,
-  Pin,
-  PinOff,
-  RefreshCw,
   Save,
-  ScanSearch,
   X,
 } from "lucide-react"
 import Link from "next/link"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { AppAlert } from "@/components/shared/app-alert"
 import { StatusDot } from "@/components/shared/status-dot"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { buttonVariants } from "@/components/ui/button-variants"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -64,6 +69,19 @@ function stripFrontmatter(rawContent: string): string {
 
 type WorkspaceMode = "edit" | "preview"
 type InspectorTab = "outline" | "metadata" | "links" | "tasks" | "history"
+type ReaderFontSize = "sm" | "md" | "lg"
+
+const READER_FONT_SIZE_STORAGE_KEY = "localdocs.reader-font-size"
+const READER_FONT_SIZES: ReaderFontSize[] = ["sm", "md", "lg"]
+
+function getStoredReaderFontSize(): ReaderFontSize {
+  if (typeof window === "undefined") {
+    return "md"
+  }
+
+  const storedValue = window.localStorage.getItem(READER_FONT_SIZE_STORAGE_KEY)
+  return READER_FONT_SIZES.includes(storedValue as ReaderFontSize) ? (storedValue as ReaderFontSize) : "md"
+}
 
 export function DocumentWorkspace({ initialDocument }: { initialDocument: Document }) {
   const [document, setDocument] = useState(initialDocument)
@@ -77,6 +95,7 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
   }))
   const [editorValue, setEditorValue] = useState(initialDocument.raw_content)
   const [mode, setMode] = useState<WorkspaceMode>("preview")
+  const [readerFontSize, setReaderFontSize] = useState<ReaderFontSize>("md")
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("outline")
   const [message, setMessage] = useState("")
@@ -92,8 +111,14 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
   const [versionLoadingId, setVersionLoadingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [readerToolbarVisible, setReaderToolbarVisible] = useState(true)
+  const [readerToolbarElevated, setReaderToolbarElevated] = useState(false)
+  const [readerTopZoneActive, setReaderTopZoneActive] = useState(false)
+  const [readerPreferencesReady, setReaderPreferencesReady] = useState(false)
 
   const readerState = useReaderState()
+  const contentScrollRef = useRef<HTMLDivElement | null>(null)
+  const lastScrollTopRef = useRef(0)
 
   useEffect(() => {
     recordLastRead(lastReadSnapshot)
@@ -115,8 +140,32 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
   const dirty = editorValue !== document.raw_content
   const expectedHash = document.disk_content_hash ?? document.content_hash
   const pinned = readerState.pinned.some((item) => item.id === document.id)
+  const readerFontSizeIndex = READER_FONT_SIZES.indexOf(readerFontSize)
 
   useUnsavedChangesWarning(dirty)
+
+  useEffect(() => {
+    setReaderFontSize(getStoredReaderFontSize())
+    setReaderPreferencesReady(true)
+  }, [])
+
+  useEffect(() => {
+    if (!readerPreferencesReady) {
+      return
+    }
+
+    window.localStorage.setItem(READER_FONT_SIZE_STORAGE_KEY, readerFontSize)
+  }, [readerFontSize, readerPreferencesReady])
+
+  useEffect(() => {
+    setReaderToolbarVisible(true)
+    setReaderToolbarElevated(false)
+    lastScrollTopRef.current = 0
+
+    if (contentScrollRef.current) {
+      contentScrollRef.current.scrollTop = 0
+    }
+  }, [document.id, mode])
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
@@ -255,168 +304,369 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
     { id: "tasks", label: "Tasks" },
     { id: "history", label: "History" },
   ]
+  const savedStateLabel = !document.file_exists
+    ? "Missing on disk"
+    : document.has_unindexed_changes
+      ? "Changed outside app"
+      : dirty
+        ? "Unsaved"
+        : "Saved"
+  const previewAlerts = (
+    <div className="space-y-2 pb-3">
+      {!document.file_exists ? (
+        <AppAlert variant="error" className="rounded-xl px-3 py-2 text-sm">
+          The source file is missing on disk. Reload or reindex before editing.
+        </AppAlert>
+      ) : null}
+      {document.has_unindexed_changes && document.file_exists ? (
+        <AppAlert variant="warning" className="rounded-xl px-3 py-2 text-sm">
+          The file changed on disk outside the app. Reload before saving so you do not overwrite newer content.
+        </AppAlert>
+      ) : null}
+      {document.is_read_only ? (
+        <AppAlert className="rounded-xl px-3 py-2 text-sm">
+          This document comes from a mirrored remote device share. Editing is disabled here.
+        </AppAlert>
+      ) : null}
+      {error ? (
+        <AppAlert variant="error" className="rounded-xl px-3 py-2 text-sm">
+          {error}
+        </AppAlert>
+      ) : null}
+      {notice ? (
+        <AppAlert variant="success" className="rounded-xl px-3 py-2 text-sm">
+          {notice}
+        </AppAlert>
+      ) : null}
+    </div>
+  )
+
+  function handleReaderScroll(event: React.UIEvent<HTMLDivElement>) {
+    const nextScrollTop = event.currentTarget.scrollTop
+    setReaderToolbarElevated(nextScrollTop > 12)
+    setReaderToolbarVisible(nextScrollTop <= 56 || readerTopZoneActive)
+    lastScrollTopRef.current = nextScrollTop
+  }
+
+  function handleReaderMouseMove(event: React.MouseEvent<HTMLDivElement>) {
+    const scrollContainer = event.currentTarget
+    const bounds = scrollContainer.getBoundingClientRect()
+    const nearTop = event.clientY - bounds.top <= 72
+    if (nearTop !== readerTopZoneActive) {
+      setReaderTopZoneActive(nearTop)
+      if (nearTop) {
+        setReaderToolbarVisible(true)
+      } else if (scrollContainer.scrollTop > 56) {
+        setReaderToolbarVisible(false)
+      }
+    }
+  }
+
+  function handleReaderMouseLeave() {
+    setReaderTopZoneActive(false)
+    if ((contentScrollRef.current?.scrollTop ?? 0) > 56) {
+      setReaderToolbarVisible(false)
+    }
+  }
 
   return (
-    <div className="flex h-full min-h-[calc(100vh-3.5rem)] flex-col lg:min-h-[calc(100vh-4rem)]">
-      <div className="border-b border-border/70 bg-background/80 px-4 py-3 backdrop-blur sm:px-6">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="min-w-0 space-y-2">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Link
-                href="/documents"
-                onClick={(event) => {
-                  if (!confirmUnsafeNavigation()) {
-                    event.preventDefault()
-                  }
-                }}
-                className={buttonVariants({ variant: "ghost", size: "sm" })}
-              >
-                <ArrowLeft className="size-4" />
-                Library
-              </Link>
-              <span>•</span>
-              <span>{document.project_name ?? "No project"}</span>
-              <span>•</span>
-              <span>{document.folder_name ?? "No folder"}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="min-w-0 text-2xl font-semibold tracking-tight sm:text-3xl">{document.title}</h1>
-              <Badge variant="secondary">{document.source_type === "remote_mirror" ? "Remote mirror" : "Local"}</Badge>
-              {document.is_read_only ? <Badge variant="outline">Read-only</Badge> : null}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusDot
-                tone={
-                  !document.file_exists
-                    ? "danger"
-                    : document.has_unindexed_changes
-                      ? "warning"
-                      : dirty
-                        ? "info"
-                        : "success"
-                }
-                label={
-                  !document.file_exists
-                    ? "Missing on disk"
-                    : document.has_unindexed_changes
-                      ? "Changed outside app"
-                      : dirty
-                        ? "Unsaved"
-                        : "Saved"
-                }
-              />
-              {tags.slice(0, 4).map((tag) => (
-                <Badge key={tag} variant="outline">
-                  {tag}
-                </Badge>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 xl:justify-end">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                togglePinnedDocument(document)
-              }}
-            >
-              {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
-              {pinned ? "Unpin" : "Pin"}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setInspectorOpen((current) => !current)}>
-              <PanelRight className="size-4" />
-              {inspectorOpen ? "Hide sidebar" : "Show sidebar"}
-            </Button>
-            <div className="flex items-center gap-1 rounded-2xl border border-border/70 bg-muted/40 p-1">
-              <Button variant={mode === "preview" ? "secondary" : "ghost"} size="sm" onClick={() => setMode("preview")}>
-                <Eye className="size-4" />
-                Read
-              </Button>
-              <Button variant={mode === "edit" ? "secondary" : "ghost"} size="sm" onClick={() => setMode("edit")}>
-                <PencilLine className="size-4" />
-                Edit
-              </Button>
-            </div>
-            <Button variant="ghost" size="sm" onClick={() => void handleReload()} disabled={reloading}>
-              {reloading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-              Reload
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="px-4 pt-4 sm:px-6">
-        <div className="space-y-3">
-          {!document.file_exists ? (
-            <AppAlert variant="error">The source file is missing on disk. Reload or reindex before editing.</AppAlert>
-          ) : null}
-          {document.has_unindexed_changes && document.file_exists ? (
-            <AppAlert variant="warning">The file changed on disk outside the app. Reload before saving so you do not overwrite newer content.</AppAlert>
-          ) : null}
-          {document.is_read_only ? (
-            <AppAlert>This document comes from a mirrored remote device share. Editing is disabled here.</AppAlert>
-          ) : null}
-          {error ? <AppAlert variant="error">{error}</AppAlert> : null}
-          {notice ? <AppAlert variant="success">{notice}</AppAlert> : null}
-        </div>
-      </div>
-
-      <div className="relative flex min-h-0 flex-1 px-4 pb-4 pt-4 sm:px-6">
-        <div className="min-w-0 flex-1">
-          <div className={cn("mx-auto h-full", mode === "preview" ? "max-w-4xl" : "max-w-5xl")}> 
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden px-4 pb-4 pt-4 sm:px-6">
+        <div
+          ref={contentScrollRef}
+          className="min-w-0 flex-1 overflow-y-auto"
+          onScroll={handleReaderScroll}
+          onMouseMove={handleReaderMouseMove}
+          onMouseLeave={handleReaderMouseLeave}
+        >
+          <div className="mx-auto h-full w-full max-w-[68rem]">
             {mode === "edit" ? (
-              <div className="flex h-full flex-col gap-4">
-                <label className="space-y-2">
-                  <span className="text-sm font-medium text-muted-foreground">Save note</span>
+              <div className="min-h-full px-1 pb-16 pt-2 sm:px-4 lg:px-8">
+                <div
+                  className={cn(
+                    "pointer-events-none sticky top-3 z-20 mb-4 transition-all duration-200",
+                    readerToolbarVisible ? "translate-y-0 opacity-100" : "-translate-y-3 opacity-0"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div
+                      className={cn(
+                        "pointer-events-auto rounded-2xl border border-border/45 bg-background/28 p-1 shadow-[0_12px_32px_-24px_rgba(15,23,42,0.8)] backdrop-blur-sm",
+                        readerToolbarElevated && "bg-background/38"
+                      )}
+                    >
+                      <Link
+                        href="/documents"
+                        onClick={(event) => {
+                          if (!confirmUnsafeNavigation()) {
+                            event.preventDefault()
+                          }
+                        }}
+                        className={cn(
+                          buttonVariants({ variant: "ghost", size: "sm" }),
+                          "h-8 rounded-xl px-2 text-muted-foreground hover:text-foreground"
+                        )}
+                        aria-label="Back to library"
+                        title="Back to library"
+                      >
+                        <ArrowLeft className="size-4" />
+                      </Link>
+                    </div>
+
+                    <div
+                      className={cn(
+                        "pointer-events-auto flex items-center gap-1 rounded-2xl border border-border/45 bg-background/28 p-1 shadow-[0_12px_32px_-24px_rgba(15,23,42,0.8)] backdrop-blur-sm",
+                        readerToolbarElevated && "bg-background/38"
+                      )}
+                    >
+                      <Button
+                        variant={inspectorOpen ? "secondary" : "ghost"}
+                        size="icon-sm"
+                        onClick={() => setInspectorOpen((current) => !current)}
+                        aria-label={inspectorOpen ? "Hide sidebar" : "Show sidebar"}
+                        title={inspectorOpen ? "Hide sidebar" : "Show sidebar"}
+                      >
+                        <PanelRight className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => setMode("preview")}
+                        aria-label="Read mode"
+                        title="Read mode"
+                      >
+                        <Eye className="size-4" />
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="icon-sm"
+                        onClick={() => setMode("edit")}
+                        aria-label="Edit mode"
+                        title="Edit mode"
+                      >
+                        <PencilLine className="size-4" />
+                      </Button>
+                      {mode === "edit" ? (
+                        <Button
+                          variant={dirty ? "secondary" : "ghost"}
+                          size="icon-sm"
+                          onClick={() => void handleSave()}
+                          disabled={document.is_read_only || !document.file_exists || !dirty || saving}
+                          aria-label="Save document"
+                          title={dirty ? "Save changes" : "All changes saved"}
+                        >
+                          {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                        </Button>
+                      ) : null}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <Button variant="ghost" size="icon-sm" aria-label="Reader options" title="Reader options">
+                              <MoreHorizontal className="size-4" />
+                            </Button>
+                          }
+                        />
+                        <DropdownMenuContent align="end" className="w-56 rounded-2xl border-border/70 bg-background/95 p-1.5 backdrop-blur-xl">
+                          <DropdownMenuLabel>{mode === "edit" ? "Editor options" : "Reader options"}</DropdownMenuLabel>
+                          {mode === "edit" ? (
+                            <DropdownMenuItem
+                              onClick={() => void handleSave()}
+                              disabled={document.is_read_only || !document.file_exists || !dirty || saving}
+                            >
+                              {saving ? "Saving…" : dirty ? "Save changes" : "All changes saved"}
+                            </DropdownMenuItem>
+                          ) : null}
+                          <DropdownMenuItem onClick={() => togglePinnedDocument(document)}>
+                            {pinned ? "Unpin document" : "Pin document"}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => void handleReload()} disabled={reloading}>
+                            {reloading ? "Reloading…" : "Reload document"}
+                          </DropdownMenuItem>
+                          {(document.has_unindexed_changes || !document.file_exists) && mode === "edit" ? (
+                            <DropdownMenuItem onClick={() => void handleRescanFolder()} disabled={rescanning}>
+                              {rescanning ? "Rescanning…" : "Rescan folder"}
+                            </DropdownMenuItem>
+                          ) : null}
+                          {(document.has_unindexed_changes || !document.file_exists) && mode === "edit" ? (
+                            <DropdownMenuItem onClick={() => void handleRebuildFolder()} disabled={rebuildingFolder}>
+                              {rebuildingFolder ? "Queueing rebuild…" : "Queue folder rebuild"}
+                            </DropdownMenuItem>
+                          ) : null}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuLabel>Text size</DropdownMenuLabel>
+                          <DropdownMenuItem
+                            onClick={() => setReaderFontSize(READER_FONT_SIZES[Math.max(readerFontSizeIndex - 1, 0)])}
+                            disabled={readerFontSizeIndex === 0}
+                          >
+                            Smaller text
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setReaderFontSize(READER_FONT_SIZES[Math.min(readerFontSizeIndex + 1, READER_FONT_SIZES.length - 1)])}
+                            disabled={readerFontSizeIndex === READER_FONT_SIZES.length - 1}
+                          >
+                            Larger text
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuLabel>Status</DropdownMenuLabel>
+                          <DropdownMenuItem disabled>{savedStateLabel}</DropdownMenuItem>
+                          <DropdownMenuItem disabled>{document.source_type === "remote_mirror" ? "Remote mirror" : "Local document"}</DropdownMenuItem>
+                          {document.is_read_only ? <DropdownMenuItem disabled>Read-only</DropdownMenuItem> : null}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </div>
+                </div>
+
+                {previewAlerts}
+
+                <div className="mb-4 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                  <StatusDot
+                    tone={
+                      !document.file_exists
+                        ? "danger"
+                        : document.has_unindexed_changes
+                          ? "warning"
+                          : dirty
+                            ? "info"
+                            : "success"
+                    }
+                    label={dirty ? "Unsaved changes" : "Editing"}
+                  />
+                  <span className="hidden sm:inline">Updated {formatTimestamp(document.updated_at)}</span>
+                  <span className="hidden sm:inline">•</span>
+                  <span>{(document.size_bytes / 1024).toFixed(1)} KB</span>
+                </div>
+
+                <label className="mb-4 block space-y-2">
+                  <span className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Save note</span>
                   <Input
                     value={message}
                     onChange={(event) => setMessage(event.target.value)}
-                    placeholder="What changed?"
+                    placeholder="Optional change note"
+                    className="h-11 rounded-xl border-border/60 bg-transparent shadow-none"
                   />
                 </label>
+
                 <Textarea
                   value={editorValue}
                   onChange={(event) => setEditorValue(event.target.value)}
-                  className="min-h-[65vh] flex-1 rounded-[1.75rem] border-border/80 bg-background px-5 py-5 font-mono text-[0.95rem] leading-7 shadow-sm"
+                  className="min-h-[78vh] w-full resize-none border-0 bg-transparent px-0 py-0 font-mono text-[0.98rem] leading-8 shadow-none focus-visible:ring-0"
                   spellCheck={false}
                 />
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.5rem] border border-border/70 bg-card/80 px-4 py-3 text-xs text-muted-foreground">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span>{dirty ? "Unsaved changes" : "All changes saved"}</span>
-                    <span>Updated {formatTimestamp(document.updated_at)}</span>
-                    <span>{(document.size_bytes / 1024).toFixed(1)} KB</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {(document.has_unindexed_changes || !document.file_exists) && (
-                      <>
-                        <Button variant="outline" size="sm" onClick={() => void handleRescanFolder()} disabled={rescanning}>
-                          {rescanning ? <Loader2 className="size-4 animate-spin" /> : <ScanSearch className="size-4" />}
-                          Rescan
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => void handleRebuildFolder()} disabled={rebuildingFolder}>
-                          {rebuildingFolder ? <Loader2 className="size-4 animate-spin" /> : <AlertTriangle className="size-4" />}
-                          Rebuild
-                        </Button>
-                      </>
-                    )}
-                    <Button onClick={() => void handleSave()} disabled={document.is_read_only || !document.file_exists || !dirty || saving}>
-                      {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                      Save
-                    </Button>
-                  </div>
-                </div>
               </div>
             ) : (
-              <div className="rounded-[2rem] border border-border/70 bg-card/70 px-6 py-6 shadow-[0_18px_60px_-42px_rgba(15,23,42,0.35)] sm:px-10 sm:py-10 lg:px-14 lg:py-12">
-                <div className="mb-8 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                  <span>{document.file_name}</span>
-                  <span>•</span>
-                  <span>{formatRelativeTime(document.updated_at)}</span>
-                  <span>•</span>
-                  <span>{(document.size_bytes / 1024).toFixed(1)} KB</span>
+              <div className="min-h-full px-1 pb-16 pt-2 sm:px-4 lg:px-8">
+                <div
+                  className={cn(
+                    "pointer-events-none sticky top-3 z-20 mb-4 transition-all duration-200",
+                    readerToolbarVisible ? "translate-y-0 opacity-100" : "-translate-y-3 opacity-0"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div
+                      className={cn(
+                        "pointer-events-auto rounded-2xl border border-border/45 bg-background/28 p-1 shadow-[0_12px_32px_-24px_rgba(15,23,42,0.8)] backdrop-blur-sm",
+                        readerToolbarElevated && "bg-background/38"
+                      )}
+                    >
+                      <Link
+                        href="/documents"
+                        onClick={(event) => {
+                          if (!confirmUnsafeNavigation()) {
+                            event.preventDefault()
+                          }
+                        }}
+                        className={cn(
+                          buttonVariants({ variant: "ghost", size: "sm" }),
+                          "h-8 rounded-xl px-2 text-muted-foreground hover:text-foreground"
+                        )}
+                        aria-label="Back to library"
+                        title="Back to library"
+                      >
+                        <ArrowLeft className="size-4" />
+                      </Link>
+                    </div>
+
+                    <div
+                      className={cn(
+                        "pointer-events-auto flex items-center gap-1 rounded-2xl border border-border/45 bg-background/28 p-1 shadow-[0_12px_32px_-24px_rgba(15,23,42,0.8)] backdrop-blur-sm",
+                        readerToolbarElevated && "bg-background/38"
+                      )}
+                    >
+                      <Button
+                        variant={inspectorOpen ? "secondary" : "ghost"}
+                        size="icon-sm"
+                        onClick={() => setInspectorOpen((current) => !current)}
+                        aria-label={inspectorOpen ? "Hide sidebar" : "Show sidebar"}
+                        title={inspectorOpen ? "Hide sidebar" : "Show sidebar"}
+                      >
+                        <PanelRight className="size-4" />
+                      </Button>
+                      <Button
+                        variant={mode === "preview" ? "secondary" : "ghost"}
+                        size="icon-sm"
+                        onClick={() => setMode("preview")}
+                        aria-label="Read mode"
+                        title="Read mode"
+                      >
+                        <Eye className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => setMode("edit")}
+                        aria-label="Edit mode"
+                        title="Edit mode"
+                      >
+                        <PencilLine className="size-4" />
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <Button variant="ghost" size="icon-sm" aria-label="Reader options" title="Reader options">
+                              <MoreHorizontal className="size-4" />
+                            </Button>
+                          }
+                        />
+                        <DropdownMenuContent align="end" className="w-56 rounded-2xl border-border/70 bg-background/95 p-1.5 backdrop-blur-xl">
+                          <DropdownMenuLabel>Reader options</DropdownMenuLabel>
+                          <DropdownMenuItem onClick={() => togglePinnedDocument(document)}>
+                            {pinned ? "Unpin document" : "Pin document"}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => void handleReload()} disabled={reloading}>
+                            {reloading ? "Reloading…" : "Reload document"}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuLabel>Text size</DropdownMenuLabel>
+                          <DropdownMenuItem
+                            onClick={() => setReaderFontSize(READER_FONT_SIZES[Math.max(readerFontSizeIndex - 1, 0)])}
+                            disabled={readerFontSizeIndex === 0}
+                          >
+                            Smaller text
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setReaderFontSize(READER_FONT_SIZES[Math.min(readerFontSizeIndex + 1, READER_FONT_SIZES.length - 1)])}
+                            disabled={readerFontSizeIndex === READER_FONT_SIZES.length - 1}
+                          >
+                            Larger text
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuLabel>Status</DropdownMenuLabel>
+                          <DropdownMenuItem disabled>{savedStateLabel}</DropdownMenuItem>
+                          <DropdownMenuItem disabled>{document.source_type === "remote_mirror" ? "Remote mirror" : "Local document"}</DropdownMenuItem>
+                          {document.is_read_only ? <DropdownMenuItem disabled>Read-only</DropdownMenuItem> : null}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </div>
                 </div>
-                <MarkdownRenderer content={stripFrontmatter(editorValue)} />
+                {previewAlerts}
+                <MarkdownRenderer
+                  key={document.id}
+                  documentId={document.id}
+                  content={stripFrontmatter(editorValue)}
+                  fontSize={readerFontSize}
+                />
               </div>
             )}
           </div>
@@ -430,7 +680,7 @@ export function DocumentWorkspace({ initialDocument }: { initialDocument: Docume
               aria-label="Close inspector"
               onClick={() => setInspectorOpen(false)}
             />
-            <aside className="fixed inset-y-14 right-0 z-40 w-full max-w-sm border-l border-border/70 bg-background/96 shadow-2xl backdrop-blur sm:inset-y-16 xl:static xl:ml-6 xl:block xl:w-[22rem] xl:max-w-none xl:rounded-[1.75rem] xl:border xl:shadow-none">
+            <aside className="fixed inset-y-0 right-0 z-40 w-full max-w-sm border-l border-border/70 bg-background/96 shadow-2xl backdrop-blur xl:static xl:ml-6 xl:block xl:w-[22rem] xl:max-w-none xl:rounded-[1.75rem] xl:border xl:shadow-none">
               <div className="flex h-full flex-col">
                 <div className="flex items-center justify-between border-b border-border/70 px-4 py-4">
                   <div>

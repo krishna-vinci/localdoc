@@ -7,7 +7,6 @@ import {
   FileText,
   FolderOpen,
   Layers3,
-  Search,
   Smartphone,
 } from "lucide-react"
 import Link from "next/link"
@@ -30,13 +29,11 @@ export function ManageSidebar({
   mobile = false,
   onNavigate,
   onToggle,
-  onOpenSearch,
 }: {
   collapsed?: boolean
   mobile?: boolean
   onNavigate?: () => void
   onToggle?: () => void
-  onOpenSearch?: () => void
 }) {
   const pathname = usePathname()
   const compact = collapsed && !mobile
@@ -44,7 +41,7 @@ export function ManageSidebar({
   return (
     <aside
       className={cn(
-        "flex h-full shrink-0 flex-col border-r border-sidebar-border/80 bg-sidebar/95 backdrop-blur transition-[width] duration-200",
+        "flex h-full min-h-0 shrink-0 flex-col border-r border-sidebar-border/80 bg-sidebar/95 backdrop-blur transition-[width] duration-200",
         compact ? "w-[5.5rem]" : "w-[18.5rem]",
         mobile && "h-dvh w-full"
       )}
@@ -53,7 +50,7 @@ export function ManageSidebar({
         {compact ? (
           <div className="flex flex-col items-center gap-2">
             <div className="flex size-10 items-center justify-center rounded-2xl bg-sidebar-primary text-sidebar-primary-foreground shadow-sm">
-              <Search className="size-4" />
+              <FileText className="size-4" />
             </div>
             <Button variant="ghost" size="icon-sm" onClick={onToggle} aria-label="Expand sidebar">
               <ChevronRight className="size-4" />
@@ -74,27 +71,12 @@ export function ManageSidebar({
         )}
       </div>
 
-      <div className={cn("space-y-3 border-b border-sidebar-border/70 px-3 py-4", compact && "px-2")}>
+      <div className={cn("border-b border-sidebar-border/70 px-3 py-4", compact && "px-2")}>
         {!compact ? <StatusDot tone="warning" label="Management surface" /> : <div className="flex justify-center"><span className="size-2 rounded-full bg-amber-500" /></div>}
-        <button
-          type="button"
-          onClick={onOpenSearch}
-          className={cn(
-            "flex w-full items-center rounded-2xl border border-sidebar-border/70 bg-background/55 text-left text-sidebar-foreground/80 transition-colors hover:bg-background/80",
-            compact ? "justify-center px-2 py-3" : "gap-3 px-3 py-3"
-          )}
-        >
-          <Search className="size-4 shrink-0" />
-          {!compact ? (
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium">Search your library</span>
-              <span className="block truncate text-xs text-sidebar-foreground/55">⌘K still works here</span>
-            </span>
-          ) : null}
-        </button>
       </div>
 
-      <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
+      <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+        <div className="flex flex-col gap-1">
         {manageItems.map(({ href, icon: Icon, label, description }) => {
           const active = pathname === href || pathname.startsWith(`${href}/`)
 
@@ -137,6 +119,7 @@ export function ManageSidebar({
             </Link>
           )
         })}
+        </div>
       </nav>
 
       <div className={cn("border-t border-sidebar-border/70 p-3", compact && "p-2")}>
