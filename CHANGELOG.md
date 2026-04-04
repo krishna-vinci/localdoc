@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1
+
+- refined the reader into a more immersive markdown experience with lighter chrome and edge controls
+- improved markdown rendering with task toggles, code copy actions, better long-line handling, and reader font sizing
+- simplified sidebar behavior and fixed reader/edit interactions for smoother navigation and management access
+
 ## v0.2.0
 
 - redesigned the frontend around a reading-first workspace
